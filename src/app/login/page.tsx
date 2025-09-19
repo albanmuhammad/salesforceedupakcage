@@ -23,34 +23,73 @@ export default function LoginPage() {
             setErr(error.message);
             return;
         }
-        window.location.href = '/dashboard';
+        window.location.href = "/dashboard";
     }
 
     return (
-        <div className="min-h-screen grid place-items-center">
-            <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4">
-                <h1 className="text-2xl font-semibold">Login</h1>
-                <input
-                    className="border w-full p-2 rounded"
-                    placeholder="email"
-                    type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                />
-                <input
-                    className="border w-full p-2 rounded"
-                    placeholder="password"
-                    type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                />
-                {err && <p className="text-red-600 text-sm">{err}</p>}
-                <button className="w-full bg-black text-white rounded p-2">Sign in</button>
+        <div className="min-h-screen relative flex items-center justify-center bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600">
+            {/* Logo di pojok kiri atas */}
+            <img
+                src="/Logo-MetroSeven-removebg-preview.png"
+                alt="logo metroseven"
+                className="absolute top-6 left-6 h-36 w-auto"
+            />
 
-                <p className="text-sm text-center">
-                    don’t have account?{" "}
-                    {/* arahkan ke /register aplikasi lain */}
-                    <a className="underline" href="https://metro-seven-web-to-lead.vercel.app/register.html" target="_blank">
-                        register
-                    </a>
-                </p>
-            </form>
+            <div className="flex flex-col md:flex-row items-center justify-center gap-16">
+                {/* Left side */}
+                <div className="text-center text-white space-y-4 max-w-md">
+                    <div className="flex justify-center mb-5">
+                        <img src="/graduate.png" alt="Graduation" className="h-50 w-auto" />
+                    </div>
+                    <h1 className="text-5xl font-bold">
+                        Welcome to <br /> Metro Seven
+                    </h1>
+                    <p className="text-sm">ready to apply for your future in Metro Seven?</p>
+                </div>
+
+                {/* Right side - Login Box */}
+                <form
+                    onSubmit={onSubmit}
+                    className="bg-white shadow-xl rounded-xl p-8 w-full max-w-sm space-y-5"
+                >
+                    <h2 className="text-2xl font-semibold text-gray-800">Sign In</h2>
+
+                    <input
+                        className="border-2 w-full p-3 rounded-lg text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-500 placeholder:font-medium"
+                        placeholder="Email Address"
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                    />
+
+                    <input
+                        className="border-2 w-full p-3 rounded-lg text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-500 placeholder:font-medium"
+                        placeholder="Password"
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                    />
+
+                    {err && <p className="text-red-600 text-sm">{err}</p>}
+
+                    <button
+                        type="submit"
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg p-3 font-semibold transition"
+                    >
+                        Sign In
+                    </button>
+
+                    <p className="text-sm text-center text-gray-600">
+                        Don’t have an account yet?{" "}
+                        <a
+                            className="text-blue-600 font-medium hover:underline"
+                            href="https://metro-seven-web-to-lead.vercel.app/register.html"
+                        >
+                            Register
+                        </a>
+                    </p>
+                </form>
+            </div>
         </div>
     );
 }
