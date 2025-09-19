@@ -14,11 +14,32 @@ export async function POST(req: Request) {
 
     const supabase = createAdminClient();
 
-    // Buat user di Supabase Auth
+    // Check if email already exists
+    const { data: existingUsers, error: listError } =
+      await supabase.auth.admin.listUsers();
+    if (listError) {
+      return NextResponse.json(
+        { ok: false, error: listError.message },
+        { status: 500 }
+      );
+    }
+
+    const isTaken = existingUsers.users.some(
+      (user) => user.email?.toLowerCase() === email.toLowerCase()
+    );
+
+    if (isTaken) {
+      return NextResponse.json(
+        { ok: false, error: "Email already registered" },
+        { status: 400 }
+      );
+    }
+
+    // Create user
     const { data, error } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true, // skip verifikasi email (opsional)
+      email_confirm: true, // skip verification (optional)
       user_metadata: { source: "external-app" },
     });
 
