@@ -7,6 +7,28 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const runtime = "nodejs";
 
+type AccountRow = {
+  Id: string;
+  Name: string;
+  IsPersonAccount?: boolean;
+  PersonEmail?: string | null;
+};
+
+type OpportunityRow = {
+  Id: string;
+  Name: string;
+  StageName: string;
+  CreatedDate: string;
+  AccountId: string;
+  CloseDate?: string | null;
+  Amount?: number | null;
+  Campus__c?: string | null;
+  Campus__r?: { Name?: string | null } | null;
+  Study_Program__c?: string | null;
+  Study_Program__r?: { Name?: string | null } | null;
+  Test_Schedule__c?: string | null;
+};
+
 export async function GET(req: Request) {
   const traceId = Date.now().toString(36);
   console.log(`[progress][${traceId}] HIT /api/salesforce/progress`);
@@ -14,6 +36,7 @@ export async function GET(req: Request) {
   const emailFromHeader = req.headers.get("x-user-email");
 
   const fetchByEmail = async (email: string) => {
+    // escape single quotes untuk SOQL
     const emailEsc = (email || "").replace(/'/g, "\\'");
 
     // 1) Cari Person Account langsung by PersonEmail
@@ -24,7 +47,7 @@ export async function GET(req: Request) {
         AND PersonEmail = '${emailEsc}'
       LIMIT 1
     `;
-    let accs = await sfQuery<{ Id: string; Name: string }>(qAcc1);
+    let accs = await sfQuery<AccountRow>(qAcc1);
 
     // 2) Fallback: via Contact.Email
     if (!accs.length) {
@@ -39,10 +62,12 @@ export async function GET(req: Request) {
           )
         LIMIT 1
       `;
-      accs = await sfQuery(qAcc2);
+      accs = await sfQuery<AccountRow>(qAcc2);
     }
 
-    if (!accs.length) return { applicantName: "", items: [] as any[] };
+    if (!accs.length) {
+      return { applicantName: "", items: [] as OpportunityRow[] };
+    }
 
     const accountId = accs[0].Id;
     const applicantName = accs[0].Name;
@@ -58,7 +83,7 @@ export async function GET(req: Request) {
       WHERE AccountId = '${accountId}'
       ORDER BY CreatedDate DESC
     `;
-    const items = await sfQuery(qOpp);
+    const items = await sfQuery<OpportunityRow>(qOpp);
     return { applicantName, items };
   };
 
@@ -70,18 +95,28 @@ export async function GET(req: Request) {
 
     // Fallback: baca session Supabase dari request
     const supabase = createClientFromRequest(req);
-    const { data: { session }, error: sErr } = await supabase.auth.getSession();
+    const {
+      data: { session },
+      error: sErr,
+    } = await supabase.auth.getSession();
     if (sErr) console.log(`[progress][${traceId}] session error:`, sErr);
     const email = session?.user?.email;
 
     if (!email) {
-      return NextResponse.json({ ok: false, error: "unauthorized", traceId }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "unauthorized", traceId },
+        { status: 401 }
+      );
     }
 
     const { applicantName, items } = await fetchByEmail(email);
     return NextResponse.json({ ok: true, applicantName, items, traceId });
-  } catch (err: any) {
-    console.error(`[progress][${traceId}] ERROR:`, err?.message || err);
-    return NextResponse.json({ ok: false, error: "internal_error", traceId }, { status: 500 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[progress][${traceId}] ERROR:`, msg);
+    return NextResponse.json(
+      { ok: false, error: "internal_error", traceId },
+      { status: 500 }
+    );
   }
 }

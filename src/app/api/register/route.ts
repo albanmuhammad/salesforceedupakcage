@@ -14,47 +14,40 @@ export async function POST(req: Request) {
 
     const supabase = createAdminClient();
 
-    // Check if email already exists
-    const { data: existingUsers, error: listError } =
-      await supabase.auth.admin.listUsers();
-    if (listError) {
-      return NextResponse.json(
-        { ok: false, error: listError.message },
-        { status: 500 }
-      );
-    }
-
-    const isTaken = existingUsers.users.some(
-      (user) => user.email?.toLowerCase() === email.toLowerCase()
-    );
-
-    if (isTaken) {
-      return NextResponse.json(
-        { ok: false, error: "Email already registered" },
-        { status: 400 }
-      );
-    }
-
-    // Create user
+    // LANGSUNG create, lalu tangani error "already registered"
     const { data, error } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true, // skip verification (optional)
+      email_confirm: true, // skip verifikasi (opsional)
       user_metadata: { source: "external-app" },
     });
 
     if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 400 }
-      );
+      // Beberapa server mengirim status di error
+      const status =
+        typeof (error as { status?: number }).status === "number"
+          ? (error as { status: number }).status
+          : 400;
+
+      // Normalisasi pesan "sudah terdaftar"
+      const msg = (error.message || "").toLowerCase();
+      if (
+        msg.includes("already") ||
+        msg.includes("registered") ||
+        msg.includes("exists")
+      ) {
+        return NextResponse.json(
+          { ok: false, error: "Email already registered" },
+          { status: 409 }
+        );
+      }
+
+      return NextResponse.json({ ok: false, error: error.message }, { status });
     }
 
     return NextResponse.json({ ok: true, user_id: data.user?.id });
-  } catch (err: any) {
-    return NextResponse.json(
-      { ok: false, error: err.message },
-      { status: 400 }
-    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ ok: false, error: message }, { status: 400 });
   }
 }

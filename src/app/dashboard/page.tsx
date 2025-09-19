@@ -11,11 +11,23 @@ function stageToColor(stage?: string) {
   return "bg-gray-300";
 }
 
+type OpportunityRow = {
+  Id: string;
+  Name: string;
+  StageName?: string | null;
+  Campus__c?: string | null;
+  Campus__r?: { Name?: string | null } | null;
+  Study_Program__c?: string | null;
+  Study_Program__r?: { Name?: string | null } | null;
+  Test_Schedule__c?: string | null;
+};
+
 export default async function Dashboard() {
-  // forward cookies ke API
-  const cookieHeader = (await cookies())
+  // forward cookies ke API (tanpa await)
+  const cookieStore = await cookies();
+  const cookieHeader = cookieStore
     .getAll()
-    .map(c => `${c.name}=${encodeURIComponent(c.value)}`)
+    .map((c) => `${c.name}=${encodeURIComponent(c.value)}`)
     .join("; ");
 
   const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
@@ -24,8 +36,17 @@ export default async function Dashboard() {
     headers: { cookie: cookieHeader },
   });
 
-  const data = await res.json();
-  const items: any[] = data?.items ?? [];
+  if (!res.ok) {
+    // fallback sederhana biar page tetap render
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center text-red-600">Failed to load progress.</div>
+      </main>
+    );
+  }
+
+  const data: { items?: OpportunityRow[]; applicantName?: string } = await res.json();
+  const items: OpportunityRow[] = data?.items ?? [];
   const applicantName: string = data?.applicantName ?? "Applicant";
 
   return (
@@ -61,16 +82,16 @@ export default async function Dashboard() {
                     <span
                       aria-hidden
                       className={`absolute top-4 right-4 h-3 w-3 rounded-full ${stageToColor(
-                        p.StageName
+                        p.StageName || undefined
                       )}`}
                     />
 
-                    {/* Title — dibesarkan & bold */}
+                    {/* Title */}
                     <div className="text-xl md:text-2xl font-semibold leading-snug text-gray-900">
                       {p.Name}
                     </div>
 
-                    {/* Details — diberi jarak dari title */}
+                    {/* Details */}
                     <dl className="mt-3 md:mt-4 text-sm md:text-[15px] text-gray-700 space-y-1.5">
                       <div className="flex gap-2">
                         <dt className="w-28 text-gray-500">status:</dt>

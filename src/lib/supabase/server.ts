@@ -1,10 +1,9 @@
 // lib/supabase/server.ts
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { NextRequest } from "next/server";
 
 export async function createClient() {
-  const cookieStore = await cookies();
+  const cookieStore = await cookies(); // tidak perlu await
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -14,18 +13,18 @@ export async function createClient() {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set(name: string, value: string, options: any) {
+        set(name: string, value: string, options: CookieOptions) {
           try {
             cookieStore.set({ name, value, ...options });
           } catch {
-            // This can fail during the initial server render
+            // Bisa gagal saat initial server render
           }
         },
-        remove(name: string, options: any) {
+        remove(name: string, options: CookieOptions) {
           try {
             cookieStore.set({ name, value: "", ...options, maxAge: 0 });
           } catch {
-            // This can fail during the initial server render
+            // Bisa gagal saat initial server render
           }
         },
       },
@@ -58,12 +57,9 @@ export function createClientFromRequest(request: Request) {
         get(name: string) {
           return cookieMap.get(name);
         },
-        set() {
-          // Can't set cookies in API routes easily
-        },
-        remove() {
-          // Can't remove cookies in API routes easily
-        },
+        // No-op di API routes; tetap ketikkan signature yang benar agar lolos tipe
+        set(_name: string, _value: string, _options: CookieOptions) {},
+        remove(_name: string, _options: CookieOptions) {},
       },
     }
   );
