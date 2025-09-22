@@ -12,6 +12,8 @@ export interface OpportunityItem {
   Name: string;
   StageName?: string | null;
 
+  Is_Active__c: boolean;
+
   Campus__c?: string | null;
   Campus__r?: LookupName;
 
@@ -30,12 +32,12 @@ export interface ProgressResponse {
 }
 
 // ==== HELPERS ====
-function stageToColor(stage?: string | null) {
-  const s = (stage || "").toLowerCase();
-  if (["approved", "closed won", "completed", "accepted", "success"].some(k => s.includes(k))) return "bg-green-500";
-  if (["review", "submitted", "processing", "in progress"].some(k => s.includes(k))) return "bg-yellow-500";
-  if (["rejected", "registration", "draft", "error"].some(k => s.includes(k))) return "bg-red-500";
-  return "bg-gray-300";
+function activeColor(status?: boolean | null) {
+  if (status) {
+    return "bg-green-500";
+  } else {
+    return "bg-red-500";
+  }
 }
 
 function formatSFDateTime(value?: string | null, tz = "Asia/Jakarta") {
@@ -114,8 +116,8 @@ export default async function Dashboard() {
                     {/* Status dot */}
                     <span
                       aria-hidden
-                      className={`absolute top-4 right-4 h-3 w-3 rounded-full ${stageToColor(
-                        p.StageName
+                      className={`absolute top-4 right-4 h-3 w-3 rounded-full ${activeColor(
+                        p.Is_Active__c
                       )}`}
                     />
 

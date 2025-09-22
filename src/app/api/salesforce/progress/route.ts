@@ -22,6 +22,7 @@ type OpportunityRow = {
   AccountId: string;
   CloseDate?: string | null;
   Amount?: number | null;
+  Is_Active__c: boolean;
   Campus__c?: string | null;
   Campus__r?: { Name?: string | null } | null;
   Study_Program__c?: string | null;
@@ -75,7 +76,7 @@ export async function GET(req: Request) {
     // === Ambil Opportunity + lookup names ===
     const qOpp = `
       SELECT
-        Id, Name, StageName, CreatedDate, AccountId, CloseDate, Amount,
+        Id, Name, StageName, CreatedDate, AccountId, CloseDate, Amount, Is_Active__c,
         Campus__c,            Campus__r.Name,
         Study_Program__c,     Study_Program__r.Name,
         Test_Schedule__c

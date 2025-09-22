@@ -3,10 +3,9 @@ import { cookies } from "next/headers";
 // app/progress/[id]/page.tsx
 export default async function ProgressDetail({
     params,
-}: { params: Promise<{ id: string }> }) {            // <- params Promise
-    const { id } = await params;                        // <- wajib await
+}: { params: Promise<{ id: string }> }) {
+    const { id } = await params;
 
-    // Kirim cookies ke API (perlu jika pakai absolute URL)
     const cookieStore = await cookies();
     const cookieHeader = cookieStore
         .getAll()
@@ -16,11 +15,13 @@ export default async function ProgressDetail({
     const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
     const res = await fetch(`${base}/api/salesforce/progress/${id}`, {
         cache: "no-store",
-        headers: { cookie: cookieHeader },                // <- penting!
+        headers: { cookie: cookieHeader },
     });
 
     if (!res.ok) {
-        return <div className="p-6">Error: gagal memuat data (HTTP {res.status})</div>;
+        return (
+            <div className="p-6">Error: gagal memuat data (HTTP {res.status})</div>
+        );
     }
 
     const json = (await res.json()) as {
@@ -30,7 +31,12 @@ export default async function ProgressDetail({
             progress: { Id: string; Name: string; Status__c?: string | null };
             siswa: Record<string, unknown>;
             orangTua?: Record<string, unknown> | null;
-            dokumen?: Array<{ Id: string; Name: string; Type__c?: string | null; Url__c?: string | null }> | null;
+            dokumen?: Array<{
+                Id: string;
+                Name: string;
+                Type__c?: string | null;
+                Url__c?: string | null;
+            }> | null;
         };
     };
 
@@ -40,43 +46,36 @@ export default async function ProgressDetail({
 
     const { progress, siswa, orangTua, dokumen } = json.data;
 
+    // 👉 gunakan client component untuk UI & interaksi
     return (
-        <main className="p-6 space-y-6">
-            <section>
-                <h1 className="text-2xl font-semibold">{progress.Name}</h1>
-                <div className="text-sm text-gray-600">Status: {progress.Status__c || "—"}</div>
-            </section>
+        <main className="min-h-screen flex justify-center bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 p-6">
+            <div className="w-full max-w-7xl">
+                <header className="mb-6">
+                    <h1 className="text-2xl font-semibold text-white drop-shadow-sm">
+                        {progress.Name}
+                    </h1>
+                    <div className="text-sm text-blue-50">
+                        Status: {progress.Status__c || "—"}
+                    </div>
+                </header>
 
-            <section>
-                <h2 className="text-xl font-semibold">Data Siswa (Person Account)</h2>
-                <pre className="bg-gray-50 p-3 rounded border">{JSON.stringify(siswa, null, 2)}</pre>
-            </section>
-
-            <section>
-                <h2 className="text-xl font-semibold">Data Orang Tua</h2>
-                <pre className="bg-gray-50 p-3 rounded border">{JSON.stringify(orangTua ?? {}, null, 2)}</pre>
-            </section>
-
-            <section>
-                <h2 className="text-xl font-semibold">Dokumen</h2>
-                {!dokumen || dokumen.length === 0 ? (
-                    <p>Belum ada dokumen.</p>
-                ) : (
-                    <ul className="space-y-2">
-                        {dokumen.map((d) => (
-                            <li key={d.Id} className="border rounded p-3">
-                                <div className="font-medium">{d.Name}</div>
-                                <div className="text-sm text-gray-600">Type: {d.Type__c || "—"}</div>
-                                {d.Url__c && (
-                                    <a className="underline text-sm" href={d.Url__c} target="_blank" rel="noopener noreferrer">
-                                        Buka
-                                    </a>
-                                )}
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </section>
+                {/* Client hanya merender grid 2 kolomnya */}
+                <ProgressClient
+                    id={progress.Id}
+                    siswa={siswa}
+                    orangTua={orangTua ?? {}}
+                    dokumen={dokumen ?? []}
+                    apiBase={base}
+                    cookieHeader={cookieHeader}
+                />
+            </div>
         </main>
     );
+}
+
+// dynamic import of client component
+async function ProgressClient(props: any) {
+    const Mod = await import("@/app/progress/[id]/_client/ProgressDetailClient");
+    const C = Mod.default;
+    return <C {...props} />;
 }
