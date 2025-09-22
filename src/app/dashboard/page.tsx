@@ -1,10 +1,36 @@
 // src/app/dashboard/page.tsx
 import { cookies } from "next/headers";
 import Link from "next/link";
-import LogoutButton from "@/app/logout/logout"; // pastikan file ini ada (client component)
+import LogoutButton from "@/app/logout/logout";
 
-// Warna titik status berdasarkan StageName
-function stageToColor(stage?: string) {
+// ==== TYPES ====
+// Lookup relation minimal field yang kita pakai (Name)
+type LookupName = { Name?: string } | null;
+
+export interface OpportunityItem {
+  Id: string;
+  Name: string;
+  StageName?: string | null;
+
+  Campus__c?: string | null;
+  Campus__r?: LookupName;
+
+  Study_Program__c?: string | null;
+  Study_Program__r?: LookupName;
+
+  Test_Schedule__c?: string | null;
+}
+
+export interface ProgressResponse {
+  ok: boolean;
+  applicantName: string;
+  items: OpportunityItem[];
+  traceId?: string;
+  error?: string;
+}
+
+// ==== HELPERS ====
+function stageToColor(stage?: string | null) {
   const s = (stage || "").toLowerCase();
   if (["approved", "closed won", "completed", "accepted", "success"].some(k => s.includes(k))) return "bg-green-500";
   if (["review", "submitted", "processing", "in progress"].some(k => s.includes(k))) return "bg-yellow-500";
@@ -12,12 +38,10 @@ function stageToColor(stage?: string) {
   return "bg-gray-300";
 }
 
-// Format string Date/Time Salesforce -> "24 Jan 2026, 01.00" (zona default Asia/Jakarta)
 function formatSFDateTime(value?: string | null, tz = "Asia/Jakarta") {
   if (!value) return "—";
   let s = String(value);
-  // SFDC sering kirim "+0000" tanpa ":"; jadikan ISO valid
-  const m = s.match(/([+-]\d{2})(\d{2})$/); // ex: +0700
+  const m = s.match(/([+-]\d{2})(\d{2})$/);
   if (m) s = s.replace(m[0], `${m[1]}:${m[2]}`);
   else if (s.endsWith("+0000")) s = s.replace("+0000", "Z");
 
@@ -43,13 +67,15 @@ export default async function Dashboard() {
     .join("; ");
 
   const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+
   const res = await fetch(`${base}/api/salesforce/progress`, {
     cache: "no-store",
     headers: { cookie: cookieHeader },
   });
 
-  const data = await res.json();
-  const items: any[] = data?.items ?? [];
+  // >>> Typesafe, tanpa any
+  const data: ProgressResponse = await res.json();
+  const items: OpportunityItem[] = data?.items ?? [];
   const applicantName: string = data?.applicantName ?? "Applicant";
 
   return (
@@ -77,7 +103,7 @@ export default async function Dashboard() {
               </div>
             )}
 
-            {/* Grid 2 kolom (1 kolom di mobile) */}
+            {/* Grid 2 kolom */}
             <ul className="grid grid-cols-1 md:grid-cols-2 gap-8">
               {items.map((p) => (
                 <li key={p.Id}>
@@ -93,7 +119,7 @@ export default async function Dashboard() {
                       )}`}
                     />
 
-                    {/* Title besar & bold */}
+                    {/* Title */}
                     <div className="text-xl md:text-2xl font-semibold leading-snug text-gray-900">
                       {p.Name}
                     </div>
@@ -107,19 +133,21 @@ export default async function Dashboard() {
 
                       <div className="flex gap-2">
                         <dt className="w-32 text-gray-500">campus:</dt>
-                        <dd className="flex-1">{p.Campus__r?.Name ?? p.Campus__c ?? "—"}</dd>
+                        <dd className="flex-1">
+                          {p.Campus__r?.Name ?? p.Campus__c ?? "—"}
+                        </dd>
                       </div>
 
                       <div className="flex gap-2">
                         <dt className="w-32 text-gray-500">study program:</dt>
-                        <dd className="flex-1">{p.Study_Program__r?.Name ?? p.Study_Program__c ?? "—"}</dd>
+                        <dd className="flex-1">
+                          {p.Study_Program__r?.Name ?? p.Study_Program__c ?? "—"}
+                        </dd>
                       </div>
 
                       <div className="flex gap-2">
                         <dt className="w-32 text-gray-500">test schedule:</dt>
-                        <dd className="flex-1">
-                          {formatSFDateTime(p.Test_Schedule__c)}
-                        </dd>
+                        <dd className="flex-1">{formatSFDateTime(p.Test_Schedule__c)}</dd>
                       </div>
                     </dl>
                   </Link>

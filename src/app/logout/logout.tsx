@@ -9,7 +9,7 @@ const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// idle timeout (menit)
+// Idle timeout (menit)
 const TIMEOUT_MINUTES = 15;
 const TIMEOUT_MS = TIMEOUT_MINUTES * 60 * 1000;
 
@@ -17,13 +17,12 @@ export default function LogoutButton() {
   const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const goLogin = () => {
-    // redirect ke halaman login
     window.location.href = "/login";
   };
 
   const doLogout = useCallback(async () => {
     try {
-      await supabase.auth.signOut(); // hapus session
+      await supabase.auth.signOut();
     } catch {}
     goLogin();
   }, []);
@@ -36,19 +35,33 @@ export default function LogoutButton() {
   useEffect(() => {
     resetTimer();
 
-    const events: (keyof WindowEventMap)[] = [
+    // ✅ window events
+    const windowEvents: (keyof WindowEventMap)[] = [
       "mousemove",
       "mousedown",
       "keydown",
       "touchstart",
       "scroll",
-      "visibilitychange",
     ];
-    const handler = () => resetTimer();
+    const windowHandler = () => resetTimer();
+    windowEvents.forEach((ev) =>
+      window.addEventListener(ev, windowHandler, { passive: true })
+    );
 
-    events.forEach((ev) => window.addEventListener(ev, handler, { passive: true }));
+    // ✅ document events (visibilitychange)
+    const documentEvents: (keyof DocumentEventMap)[] = ["visibilitychange"];
+    const documentHandler = () => resetTimer();
+    documentEvents.forEach((ev) =>
+      document.addEventListener(ev, documentHandler, false)
+    );
+
     return () => {
-      events.forEach((ev) => window.removeEventListener(ev, handler));
+      windowEvents.forEach((ev) =>
+        window.removeEventListener(ev, windowHandler)
+      );
+      documentEvents.forEach((ev) =>
+        document.removeEventListener(ev, documentHandler)
+      );
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     };
   }, [resetTimer]);
