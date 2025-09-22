@@ -1,8 +1,9 @@
-// app/dashboard/page.tsx
+// src/app/dashboard/page.tsx
 import { cookies } from "next/headers";
 import Link from "next/link";
+import LogoutButton from "@/app/logout/logout"; // pastikan file ini ada (client component)
 
-// Map StageName -> warna titik
+// Warna titik status berdasarkan StageName
 function stageToColor(stage?: string) {
   const s = (stage || "").toLowerCase();
   if (["approved", "closed won", "completed", "accepted", "success"].some(k => s.includes(k))) return "bg-green-500";
@@ -11,23 +12,34 @@ function stageToColor(stage?: string) {
   return "bg-gray-300";
 }
 
-type OpportunityRow = {
-  Id: string;
-  Name: string;
-  StageName?: string | null;
-  Campus__c?: string | null;
-  Campus__r?: { Name?: string | null } | null;
-  Study_Program__c?: string | null;
-  Study_Program__r?: { Name?: string | null } | null;
-  Test_Schedule__c?: string | null;
-};
+// Format string Date/Time Salesforce -> "24 Jan 2026, 01.00" (zona default Asia/Jakarta)
+function formatSFDateTime(value?: string | null, tz = "Asia/Jakarta") {
+  if (!value) return "—";
+  let s = String(value);
+  // SFDC sering kirim "+0000" tanpa ":"; jadikan ISO valid
+  const m = s.match(/([+-]\d{2})(\d{2})$/); // ex: +0700
+  if (m) s = s.replace(m[0], `${m[1]}:${m[2]}`);
+  else if (s.endsWith("+0000")) s = s.replace("+0000", "Z");
+
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return "—";
+
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: tz,
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
 
 export default async function Dashboard() {
-  // forward cookies ke API (tanpa await)
-  const cookieStore = await cookies();
-  const cookieHeader = cookieStore
+  // Forward cookies ke API supaya session Supabase terbaca (SSR)
+  const cookieHeader = (await cookies())
     .getAll()
-    .map((c) => `${c.name}=${encodeURIComponent(c.value)}`)
+    .map(c => `${c.name}=${encodeURIComponent(c.value)}`)
     .join("; ");
 
   const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
@@ -36,24 +48,19 @@ export default async function Dashboard() {
     headers: { cookie: cookieHeader },
   });
 
-  if (!res.ok) {
-    // fallback sederhana biar page tetap render
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center text-red-600">Failed to load progress.</div>
-      </main>
-    );
-  }
-
-  const data: { items?: OpportunityRow[]; applicantName?: string } = await res.json();
-  const items: OpportunityRow[] = data?.items ?? [];
+  const data = await res.json();
+  const items: any[] = data?.items ?? [];
   const applicantName: string = data?.applicantName ?? "Applicant";
 
   return (
     <main className="min-h-screen relative flex items-center justify-center bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600">
-      {/* Outer card wrapper */}
       <div className="w-full max-w-6xl mx-auto px-4 py-10">
-        <div className="rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40">
+        <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40">
+          {/* Logout button kanan-atas */}
+          <div className="absolute right-4 top-4">
+            <LogoutButton />
+          </div>
+
           <div className="p-6 md:p-10">
             {/* Header */}
             <div className="mb-10 text-center">
@@ -70,7 +77,7 @@ export default async function Dashboard() {
               </div>
             )}
 
-            {/* Grid 2 kolom */}
+            {/* Grid 2 kolom (1 kolom di mobile) */}
             <ul className="grid grid-cols-1 md:grid-cols-2 gap-8">
               {items.map((p) => (
                 <li key={p.Id}>
@@ -82,35 +89,37 @@ export default async function Dashboard() {
                     <span
                       aria-hidden
                       className={`absolute top-4 right-4 h-3 w-3 rounded-full ${stageToColor(
-                        p.StageName || undefined
+                        p.StageName
                       )}`}
                     />
 
-                    {/* Title */}
+                    {/* Title besar & bold */}
                     <div className="text-xl md:text-2xl font-semibold leading-snug text-gray-900">
                       {p.Name}
                     </div>
 
-                    {/* Details */}
+                    {/* Detail */}
                     <dl className="mt-3 md:mt-4 text-sm md:text-[15px] text-gray-700 space-y-1.5">
                       <div className="flex gap-2">
-                        <dt className="w-28 text-gray-500">status:</dt>
+                        <dt className="w-32 text-gray-500">status:</dt>
                         <dd className="flex-1">{p.StageName || "—"}</dd>
                       </div>
 
                       <div className="flex gap-2">
-                        <dt className="w-28 text-gray-500">campus:</dt>
+                        <dt className="w-32 text-gray-500">campus:</dt>
                         <dd className="flex-1">{p.Campus__r?.Name ?? p.Campus__c ?? "—"}</dd>
                       </div>
 
                       <div className="flex gap-2">
-                        <dt className="w-28 text-gray-500">study program:</dt>
+                        <dt className="w-32 text-gray-500">study program:</dt>
                         <dd className="flex-1">{p.Study_Program__r?.Name ?? p.Study_Program__c ?? "—"}</dd>
                       </div>
 
                       <div className="flex gap-2">
-                        <dt className="w-28 text-gray-500">test schedule:</dt>
-                        <dd className="flex-1">{p.Test_Schedule__c ?? "—"}</dd>
+                        <dt className="w-32 text-gray-500">test schedule:</dt>
+                        <dd className="flex-1">
+                          {formatSFDateTime(p.Test_Schedule__c)}
+                        </dd>
                       </div>
                     </dl>
                   </Link>
