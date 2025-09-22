@@ -1,11 +1,12 @@
+// middleware.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function middleware(req: NextRequest) {
+  // Selalu pakai res yang sama supaya cookies yang di-set tersimpan
   const res = NextResponse.next();
 
-  // Create supabase client
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -15,6 +16,7 @@ export async function middleware(req: NextRequest) {
           return req.cookies.getAll();
         },
         setAll(cookiesToSet) {
+          // Penting: set di 'res' yang akan DIRETURN
           cookiesToSet.forEach(({ name, value, options }) => {
             res.cookies.set(name, value, options);
           });
@@ -23,10 +25,10 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.getSession();
+  // ✅ Aman: verifikasi user (server contact ke Supabase Auth)
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+
+  const user = userData?.user ?? null;
 
   console.log("Middleware - path:", req.nextUrl.pathname);
   console.log("Middleware - cookies count:", req.cookies.getAll().length);
@@ -35,61 +37,35 @@ export async function middleware(req: NextRequest) {
     req.cookies.getAll().map((c) => c.name)
   );
   console.log(
-    "Middleware - session exists:",
-    !!session,
+    "Middleware - session(user) exists:",
+    !!user,
     "email:",
-    session?.user?.email
+    user?.email
   );
+  if (userErr) console.log("Middleware - getUser error:", userErr);
 
-  if (error) {
-    console.log("Middleware - session error:", error);
-  }
-
-  // Check if it's a protected route
-  const isPrivate =
+  // Proteksi halaman saja (dashboard & progress).
+  // Biarkan API handle auth sendiri (Route Handler kamu sudah pakai getUser()).
+  const isProtectedPage =
     req.nextUrl.pathname.startsWith("/dashboard") ||
-    req.nextUrl.pathname.startsWith("/progress") ||
-    req.nextUrl.pathname.startsWith("/api/salesforce");
+    req.nextUrl.pathname.startsWith("/progress");
 
-  if (isPrivate && !session) {
-    console.log("Middleware - blocking access to:", req.nextUrl.pathname);
-
-    // For API routes, return 401
-    if (req.nextUrl.pathname.startsWith("/api/")) {
-      return NextResponse.json(
-        { ok: false, error: "unauthorized from middleware" },
-        { status: 401 }
-      );
-    }
-
-    // For pages, redirect to login
+  if (isProtectedPage && !user) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirectedFrom", req.nextUrl.pathname);
     return NextResponse.redirect(url);
   }
 
-  // IMPORTANT: For API routes with valid session, pass user info via headers
-  if (req.nextUrl.pathname.startsWith("/api/") && session) {
-    console.log("Middleware - setting headers for API route");
-
-    // Clone the request with additional headers
-    const requestHeaders = new Headers(req.headers);
-    requestHeaders.set("x-user-email", session.user.email || "");
-    requestHeaders.set("x-user-id", session.user.id);
-    requestHeaders.set("x-session-access-token", session.access_token);
-
-    // Create new response with modified request headers
-    return NextResponse.next({
-      request: {
-        headers: requestHeaders,
-      },
-    });
-  }
+  // ❌ Hapus blok injeksi header ke API.
+  // Itu membuat kamu return response BARU dan kehilangan cookies yang sudah di-set.
 
   return res;
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/progress/:path*", "/api/salesforce/:path*"],
+  // Proteksi hanya halaman; API dibiarkan ke Route Handler auth sendiri
+  matcher: ["/dashboard/:path*", "/progress/:path*"],
+  // Jika mau tetap proteksi API dari middleware, tambahkan "/api/salesforce/:path*"
+  // TAPI pastikan fetch dari server KE API mengirim cookie (pakai relative URL atau kirim header cookie manual).
 };

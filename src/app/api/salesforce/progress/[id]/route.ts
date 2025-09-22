@@ -1,33 +1,40 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { sfQuery, sfGet } from "@/lib/salesforce/client";
+import { sfQuery } from "@/lib/salesforce/client";
 
 type Progress = {
   Id: string;
   Name: string;
-  Status__c: string;
-  Contact__c: string;
+  StageName: string;
+  AccountId: string | null;
 };
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
+export async function GET(
+  _: Request,
+  ctx: { params: Promise<{ id: string }> }
+) {
   const supabase = await createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.user?.email) {
+
+  // ✅ Use getUser() (secure) instead of relying on getSession().user
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData?.user?.email) {
     return NextResponse.json(
       { ok: false, error: "unauthorized" },
       { status: 401 }
     );
   }
+  const userEmail = userData.user.email.toLowerCase();
 
-  const id = params.id;
+  // ✅ Await params in Next 15 route handlers
+  const { id: rawId } = await ctx.params;
+  const id = String(rawId).replace(/'/g, "\\'"); // basic escape
 
-  // Ambil progress + Contact (pemilik)
+  // 1) Fetch Opportunity
   const [progress] = await sfQuery<Progress>(
-    `SELECT Id, Name, Status__c, Contact__c
-     FROM Application_Progress__c
-     WHERE Id='${id}' LIMIT 1`
+    `SELECT Id, Name, StageName, AccountId
+     FROM Opportunity
+     WHERE Id='${id}'
+     LIMIT 1`
   );
   if (!progress) {
     return NextResponse.json(
@@ -36,55 +43,119 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
     );
   }
 
-  // (Opsional) Validasi: pastikan email session cocok dengan Contact pemilik progress
-  const [contact] = await sfQuery<{
+  // 2) Access validation and "siswa" account payload
+  let allowed = false;
+  let siswaAccount: {
     Id: string;
-    Email: string;
-    AccountId: string;
-  }>(
-    `SELECT Id, Email, AccountId FROM Contact WHERE Id='${progress.Contact__c}' LIMIT 1`
-  );
-  if (
-    !contact ||
-    contact.Email?.toLowerCase() !== session.user.email.toLowerCase()
-  ) {
+    Name: string;
+    PersonEmail?: string | null;
+    PersonBirthdate?: string | null;
+    IsPersonAccount?: boolean;
+    PersonContactId?: string | null;
+  } | null = null;
+
+  // Try Account path first if present
+  if (progress.AccountId) {
+    const [account] = await sfQuery<{
+      Id: string;
+      Name: string;
+      PersonEmail?: string | null;
+      PersonBirthdate?: string | null;
+      IsPersonAccount?: boolean;
+      PersonContactId?: string | null;
+    }>(
+      `SELECT Id, Name, PersonEmail, PersonBirthdate, IsPersonAccount, PersonContactId
+       FROM Account
+       WHERE Id='${progress.AccountId}'
+       LIMIT 1`
+    );
+
+    if (account) {
+      siswaAccount = account;
+
+      if (account.IsPersonAccount) {
+        // Person Account path
+        const personEmail = (account.PersonEmail || "").toLowerCase();
+        if (personEmail && personEmail === userEmail) {
+          allowed = true;
+        } else if (account.PersonContactId) {
+          const [personContact] = await sfQuery<{
+            Id: string;
+            Email?: string | null;
+          }>(
+            `SELECT Id, Email
+             FROM Contact
+             WHERE Id='${account.PersonContactId}'
+             LIMIT 1`
+          );
+          if ((personContact?.Email || "").toLowerCase() === userEmail) {
+            allowed = true;
+          }
+        }
+      }
+    }
+  }
+
+  // Fallback / also try OCR path (handles B2B or missing AccountId)
+  if (!allowed) {
+    const ocr = await sfQuery<{
+      Id: string;
+      IsPrimary: boolean;
+      ContactId: string;
+    }>(
+      `SELECT Id, IsPrimary, ContactId
+       FROM OpportunityContactRole
+       WHERE OpportunityId='${progress.Id}'
+       ORDER BY IsPrimary DESC, CreatedDate ASC`
+    );
+
+    const primaryOrFirst = ocr.find((r) => r.IsPrimary) || ocr[0];
+    if (primaryOrFirst?.ContactId) {
+      const [contact] = await sfQuery<{ Id: string; Email?: string | null }>(
+        `SELECT Id, Email
+         FROM Contact
+         WHERE Id='${primaryOrFirst.ContactId}'
+         LIMIT 1`
+      );
+      if ((contact?.Email || "").toLowerCase() === userEmail) {
+        allowed = true;
+      }
+    }
+  }
+
+  if (!allowed) {
     return NextResponse.json(
       { ok: false, error: "forbidden" },
       { status: 403 }
     );
   }
 
-  // Person Account = Account yang IsPersonAccount = true dan dihubungkan ke Contact
-  const [account] = await sfQuery<{
+  // 3) Documents — map fields to the names your page expects
+  const rawDocs = await sfQuery<{
     Id: string;
     Name: string;
-    PersonEmail: string;
-    PersonBirthdate: string;
+    Document_Type__c: string | null;
+    Document_Link__c: string | null;
   }>(
-    `SELECT Id, Name, PersonEmail, PersonBirthdate
-     FROM Account
-     WHERE Id='${contact.AccountId}' LIMIT 1`
-  );
-
-  // Dokumen-dokumen (sesuaikan relasi di org kamu)
-  const docs = await sfQuery<{
-    Id: string;
-    Name: string;
-    Type__c: string;
-    Url__c: string;
-  }>(
-    `SELECT Id, Name, Type__c, Url__c
-     FROM Application_Document__c
+    `SELECT Id, Name, Document_Type__c, Document_Link__c
+     FROM Account_Document__c
      WHERE Application_Progress__c='${progress.Id}'
      ORDER BY CreatedDate DESC`
   );
+
+  const docs = rawDocs.map((d) => ({
+    Id: d.Id,
+    Name: d.Name,
+    Type__c: d.Document_Type__c ?? null,
+    Url__c: d.Document_Link__c ?? null,
+  }));
 
   return NextResponse.json({
     ok: true,
     data: {
       progress,
-      siswa: account, // data siswa dari Person Account
-      orangTua: null, // kalau ada objek Parent__c, query di sini
+      siswa: siswaAccount,
+      orangTua: null,
       dokumen: docs,
     },
   });
