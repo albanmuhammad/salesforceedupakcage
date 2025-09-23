@@ -48,23 +48,7 @@ export async function GET(req: Request) {
         AND PersonEmail = '${emailEsc}'
       LIMIT 1
     `;
-    let accs = await sfQuery<AccountRow>(qAcc1);
-
-    // 2) Fallback: via Contact.Email
-    if (!accs.length) {
-      const qAcc2 = `
-        SELECT Id, Name, IsPersonAccount, PersonEmail
-        FROM Account
-        WHERE IsPersonAccount = true
-          AND Id IN (
-            SELECT AccountId
-            FROM Contact
-            WHERE Email = '${emailEsc}'
-          )
-        LIMIT 1
-      `;
-      accs = await sfQuery<AccountRow>(qAcc2);
-    }
+    const accs = await sfQuery<AccountRow>(qAcc1);
 
     if (!accs.length) {
       return { applicantName: "", items: [] as OpportunityRow[] };
