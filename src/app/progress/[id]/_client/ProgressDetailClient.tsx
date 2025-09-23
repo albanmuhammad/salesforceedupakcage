@@ -47,7 +47,6 @@ export default function ProgressDetailClient({
 
     const siswaDirty = diff(originalSiswa, siswaEdit);
     const ortuDirty = diff(originalIbuAyah, ortuEdit);
-    const docsDirty = diff(originalDocs, docsEdit);
 
     // ----- SAVE handlers (panggil API sesuai segment) -----
     async function saveSegment(segment: "siswa" | "orangTua" | "dokumen") {
@@ -91,6 +90,8 @@ export default function ProgressDetailClient({
             ([k, v]) => !omitKeys.includes(k) && isPrimitive(v)
         );
 
+
+
         if (entries.length === 0) {
             return <div className="text-sm text-gray-500">Tidak ada field yang dapat diedit.</div>;
         }
@@ -123,6 +124,75 @@ export default function ProgressDetailClient({
             </div>
         );
     }
+    // --- daftar tipe yang ditampilkan (urut sesuai kebutuhan bisnis)
+    const REQUIRED_TYPES = [
+        "Pas Foto 3x4",
+        "Scan KTP Orang Tua",
+        "Rapor 1",
+        "Rapor 2",
+        "Rapor 3",
+        "Scan KTP",
+        "Scan Ijazah",
+        "Scan Akte Kelahiran",
+        "Scan Form Tata Tertib",
+        "Scan Kartu Keluarga",
+        "Scan Surat Sehat",
+        "Lainnya",
+    ] as const;
+
+    type RequiredType = (typeof REQUIRED_TYPES)[number];
+
+    // Normalisasi key agar kompatibel dua skema field
+    function getType(d: any) {
+        return d.Document_Type__c ?? d.Type__c ?? "";
+    }
+    function setType(d: any, v: string) {
+        if ("Document_Type__c" in d) d.Document_Type__c = v;
+        else d.Type__c = v;
+    }
+    function getLink(d: any) {
+        return d.Document_Link__c ?? d.Url__c ?? "";
+    }
+    function setLink(d: any, v: string) {
+        if ("Document_Link__c" in d) d.Document_Link__c = v;
+        else d.Url__c = v;
+    }
+
+    // petakan existing docs by type (ambil yang pertama per tipe)
+    const docsByType = useMemo(() => {
+        const m = new Map<string, any>();
+        for (const d of docsEdit) {
+            const t = getType(d);
+            if (t && !m.has(t)) m.set(t, d);
+        }
+        return m;
+    }, [docsEdit]);
+
+    // simpan file yang dipilih user sebelum diupload (key = RequiredType)
+    const [pendingUploads, setPendingUploads] = useState<Record<string, File | null>>({});
+
+    // perubahan dokumen dihitung dari docsEdit atau pendingUploads
+    const docsDirty = diff(originalDocs, docsEdit) || Object.values(pendingUploads).some(Boolean);
+
+    // handler pilih file
+    function onPickFile(type: RequiredType, file: File | null) {
+        setPendingUploads((prev) => ({ ...prev, [type]: file }));
+    }
+
+    // opsional: bila ingin langsung membuat/replace item dokumen di state agar tombol Save aktif
+    function ensureDocEntryFor(type: RequiredType) {
+        const existing = docsByType.get(type);
+        if (existing) return;
+        const draft = [...docsEdit];
+        draft.push({
+            Id: undefined, // biar server tahu ini create baru
+            Name: type,
+            Document_Type__c: type, // gunakan field yang ada, server bisa normalisasi
+            Document_Link__c: "",
+        });
+        setDocsEdit(draft);
+    }
+
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
@@ -186,44 +256,123 @@ export default function ProgressDetailClient({
 
             {/* KANAN: data application progres */}
             <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40 p-6">
-                <div className="text-lg font-semibold text-slate-700 mb-4">data application progres</div>
+                <div className="text-lg font-semibold text-slate-700 mb-4">
+                    data application progres
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {docsEdit.map((d, idx) => (
-                        <div key={d.Id} className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
-                            <div className="text-sm font-medium mb-2 text-slate-700">{d.Name}</div>
+                    {REQUIRED_TYPES.map((type) => {
+                        const existing = docsByType.get(type);
+                        const uploaded = !!existing && !!getLink(existing);
 
-                            <label className="block text-xs text-gray-600 mb-1">Type__c</label>
-                            <input
-                                className="w-full border rounded px-3 py-2 mb-2 text-sm"
-                                value={d.Type__c ?? ""}
-                                onChange={(e) => {
-                                    const draft = [...docsEdit];
-                                    draft[idx].Type__c = e.target.value;
-                                    setDocsEdit(draft);
-                                }}
-                            />
+                        return (
+                            <div
+                                key={type}
+                                className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7"
+                            >
+                                {/* header + status */}
+                                <div className="flex items-start justify-between mb-3">
+                                    <div>
+                                        <div className="text-sm font-medium text-slate-700">{type}</div>
+                                        <div
+                                            className={`text-xs mt-1 ${uploaded ? "text-emerald-600" : "text-rose-600"
+                                                }`}
+                                        >
+                                            {uploaded ? "Uploaded" : "Not Uploaded"}
+                                        </div>
+                                    </div>
 
-                            <label className="block text-xs text-gray-600 mb-1">Url__c</label>
-                            <input
-                                className="w-full border rounded px-3 py-2 text-sm"
-                                value={d.Url__c ?? ""}
-                                onChange={(e) => {
-                                    const draft = [...docsEdit];
-                                    draft[idx].Url__c = e.target.value;
-                                    setDocsEdit(draft);
-                                }}
-                            />
-                        </div>
-                    ))}
+                                    {/* jika sudah ada link, tampilkan Open */}
+                                    {uploaded && (
+                                        <a
+                                            href={getLink(existing)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-xs underline text-blue-600"
+                                        >
+                                            Open
+                                        </a>
+                                    )}
+                                </div>
+
+                                {/* pilih tipe (read-only karena fixed) */}
+                                <div className="mb-3">
+                                    <label className="block text-xs text-gray-600 mb-1">Document Type</label>
+                                    <select
+                                        className="w-full border rounded px-3 py-2 text-sm bg-gray-50"
+                                        value={existing ? getType(existing) : type}
+                                        onChange={(e) => {
+                                            // izinkan mengganti ke "Lainnya" kalau perlu
+                                            const next = e.target.value;
+                                            ensureDocEntryFor(type);
+                                            const draft = [...docsEdit];
+                                            const idx = draft.findIndex((x) => getType(x) === getType(existing ?? { Document_Type__c: type }));
+                                            if (idx >= 0) setType(draft[idx], next);
+                                            setDocsEdit(draft);
+                                        }}
+                                    >
+                                        {REQUIRED_TYPES.map((opt) => (
+                                            <option key={opt} value={opt}>
+                                                {opt}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {/* input link (opsional kalau kamu simpan URL ke File Salesforce) */}
+                                <div className="mb-3">
+                                    <label className="block text-xs text-gray-600 mb-1">Document Link</label>
+                                    <input
+                                        className="w-full border rounded px-3 py-2 text-sm"
+                                        value={existing ? getLink(existing) : ""}
+                                        onChange={(e) => {
+                                            ensureDocEntryFor(type);
+                                            const draft = [...docsEdit];
+                                            const idx = draft.findIndex((x) => getType(x) === type);
+                                            if (idx >= 0) setLink(draft[idx], e.target.value);
+                                            setDocsEdit(draft);
+                                        }}
+                                        placeholder="https://... (opsional bila upload belum diintegrasi)"
+                                    />
+                                </div>
+
+                                {/* upload/replace */}
+                                <div className="flex items-center justify-between gap-3">
+                                    <label className="text-xs text-gray-600">Upload File</label>
+                                    <input
+                                        type="file"
+                                        className="block w-full text-xs"
+                                        onChange={(e) => {
+                                            const f = e.target.files?.[0] || null;
+                                            onPickFile(type, f);
+                                            ensureDocEntryFor(type);
+                                        }}
+                                    />
+                                </div>
+
+                                {/* info file terpilih */}
+                                {pendingUploads[type] && (
+                                    <div className="mt-2 text-[11px] text-gray-500">
+                                        Selected: {pendingUploads[type]?.name}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
 
                 {docsDirty && (
                     <div className="flex justify-end mt-4">
-                        <button className="px-4 py-2 rounded-lg bg-black text-white shadow" onClick={() => saveSegment("dokumen")}>Save</button>
+                        <button
+                            className="px-4 py-2 rounded-lg bg-black text-white shadow"
+                            onClick={() => saveSegment("dokumen")}
+                        >
+                            Save
+                        </button>
                     </div>
                 )}
             </div>
+
         </div>
     );
 }
