@@ -35,7 +35,9 @@ export async function GET(
     headers.set("Cache-Control", "public, max-age=1800, s-maxage=1800");
 
     return new NextResponse(Buffer.from(arrayBuf), { status: 200, headers });
-  } catch (e: any) {
-    return new NextResponse(`Thumb proxy failed: ${e?.message || "unknown error"}`, { status: 500 });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    return new NextResponse(`Thumb proxy failed: ${message}`, { status: 500 });
   }
+
 }

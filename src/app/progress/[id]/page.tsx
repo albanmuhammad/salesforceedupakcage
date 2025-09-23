@@ -12,12 +12,33 @@ type ApiData = {
   siswa: Record<string, unknown>;
   orangTua?: Record<string, unknown> | null;
   dokumen?: ApiDoc[] | null;
-  photoVersionId?: string | null;        // <<< tambahkan
+  photoVersionId?: string | null;
+};
+
+type ClientDoc = {
+  Id?: string;
+  Name?: string;
+  Type__c?: string | null;
+  Url__c?: string | null;
+  Document_Type__c?: string | null;
+  Document_Link__c?: string | null;
+};
+
+type ClientProps = {
+  id: string;
+  siswa: Record<string, unknown>;
+  orangTua: Record<string, unknown>;
+  dokumen: ClientDoc[];
+  apiBase: string;
+  cookieHeader: string;
+  photoVersionId: string | null;
 };
 
 export default async function ProgressDetail({
   params,
-}: { params: Promise<{ id: string }> }) {
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const { id } = await params;
 
   const cookieHeader = (await cookies())
@@ -32,7 +53,9 @@ export default async function ProgressDetail({
   });
 
   if (!res.ok) {
-    return <div className="p-6">Error: gagal memuat data (HTTP {res.status})</div>;
+    return (
+      <div className="p-6">Error: gagal memuat data (HTTP {res.status})</div>
+    );
   }
 
   const json = (await res.json()) as {
@@ -45,7 +68,7 @@ export default async function ProgressDetail({
     return <div className="p-6">Error: {json.error || "Unknown error"}</div>;
   }
 
-  const { progress, siswa, orangTua, dokumen, photoVersionId } = json.data; // <<< ambil
+  const { progress, siswa, orangTua, dokumen, photoVersionId } = json.data;
 
   return (
     <main className="min-h-screen flex justify-center bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 p-6">
@@ -63,18 +86,18 @@ export default async function ProgressDetail({
           id={progress.Id}
           siswa={siswa}
           orangTua={orangTua ?? {}}
-          dokumen={dokumen ?? []}
+          dokumen={(dokumen ?? []) as ClientDoc[]}
           apiBase={base}
           cookieHeader={cookieHeader}
-          photoVersionId={photoVersionId ?? null}   // <<< teruskan ke client
+          photoVersionId={photoVersionId ?? null}
         />
       </div>
     </main>
   );
 }
 
-// dynamic import (boleh tetap any di sini, hanya sebagai bridge)
-async function ProgressClient(props: any) {
+// Dynamic import dengan props bertipe ketat (tanpa any)
+async function ProgressClient(props: ClientProps) {
   const Mod = await import("@/app/progress/[id]/_client/ProgressDetailClient");
   const C = Mod.default;
   return <C {...props} />;

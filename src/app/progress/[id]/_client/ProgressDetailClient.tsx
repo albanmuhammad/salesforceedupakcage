@@ -7,7 +7,6 @@ type Doc = {
   Name?: string;
   Type__c?: string | null;
   Url__c?: string | null;
-  // kompatibel dengan varian field lain:
   Document_Type__c?: string | null;
   Document_Link__c?: string | null;
 };
@@ -15,7 +14,8 @@ type Doc = {
 function deepClone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v));
 }
-function isPrimitive(v: unknown) {
+
+function isPrimitive(v: unknown): v is string | number | boolean | null {
   return (
     typeof v === "string" ||
     typeof v === "number" ||
@@ -23,7 +23,8 @@ function isPrimitive(v: unknown) {
     v === null
   );
 }
-function diff(a: any, b: any) {
+
+function diff(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) !== JSON.stringify(b);
 }
 
@@ -44,22 +45,20 @@ export default function ProgressDetailClient({
   cookieHeader: string;
   photoVersionId: string | null;
 }) {
-  // ===== FOTO (SF ContentVersion proxy) =====
+  // ===== FOTO =====
   const photoUrl = photoVersionId
-  ? `${apiBase}/api/salesforce/files/version/${photoVersionId}/data`
-  : "/default-avatar.png"; // pastikan file ini ada di /public
+    ? `${apiBase}/api/salesforce/files/version/${photoVersionId}/data`
+    : "/default-avatar.png";
 
   // ===== STATE =====
   const originalSiswa = useMemo(() => deepClone(siswa), [siswa]);
   const originalOrtu = useMemo(() => deepClone(orangTua), [orangTua]);
   const originalDocs = useMemo(() => deepClone(dokumen), [dokumen]);
 
-  const [siswaEdit, setSiswaEdit] = useState<Record<string, any>>(
-    deepClone(siswa)
-  );
-  const [ortuEdit, setOrtuEdit] = useState<Record<string, any>>(
-    deepClone(orangTua)
-  );
+  const [siswaEdit, setSiswaEdit] =
+    useState<Record<string, unknown>>(deepClone(siswa));
+  const [ortuEdit, setOrtuEdit] =
+    useState<Record<string, unknown>>(deepClone(orangTua));
   const [docsEdit, setDocsEdit] = useState<Doc[]>(deepClone(dokumen));
 
   const siswaDirty = diff(originalSiswa, siswaEdit);
@@ -67,7 +66,14 @@ export default function ProgressDetailClient({
 
   // ===== SAVE =====
   async function saveSegment(segment: "siswa" | "orangTua" | "dokumen") {
-    const body: any = { segment, id };
+    const body: {
+      segment: "siswa" | "orangTua" | "dokumen";
+      id: string;
+      siswa?: Record<string, unknown>;
+      orangTua?: Record<string, unknown>;
+      dokumen?: Doc[];
+    } = { segment, id };
+
     if (segment === "siswa") body.siswa = siswaEdit;
     if (segment === "orangTua") body.orangTua = ortuEdit;
     if (segment === "dokumen") body.dokumen = docsEdit;
@@ -87,7 +93,6 @@ export default function ProgressDetailClient({
       return;
     }
 
-    // reset originals
     if (segment === "siswa") Object.assign(originalSiswa, deepClone(siswaEdit));
     if (segment === "orangTua") Object.assign(originalOrtu, deepClone(ortuEdit));
     if (segment === "dokumen") {
@@ -99,8 +104,8 @@ export default function ProgressDetailClient({
 
   // ===== UI helpers =====
   function renderObjectEditor(
-    obj: Record<string, any>,
-    setObj: (v: Record<string, any>) => void,
+    obj: Record<string, unknown>,
+    setObj: (v: Record<string, unknown>) => void,
     omitKeys: string[] = []
   ) {
     const entries = Object.entries(obj).filter(
@@ -125,7 +130,10 @@ export default function ProgressDetailClient({
                 className="border rounded px-3 py-2"
                 value={String(val)}
                 onChange={(e) =>
-                  setObj({ ...obj, [key]: e.target.value === "true" })
+                  setObj({
+                    ...(obj as Record<string, unknown>),
+                    [key]: e.target.value === "true",
+                  })
                 }
               >
                 <option value="true">true</option>
@@ -134,8 +142,13 @@ export default function ProgressDetailClient({
             ) : (
               <input
                 className="border rounded px-3 py-2"
-                value={val ?? ""}
-                onChange={(e) => setObj({ ...obj, [key]: e.target.value })}
+                value={String(val ?? "")}
+                onChange={(e) =>
+                  setObj({
+                    ...(obj as Record<string, unknown>),
+                    [key]: e.target.value,
+                  })
+                }
               />
             )}
           </label>
@@ -144,7 +157,7 @@ export default function ProgressDetailClient({
     );
   }
 
-  // ===== Dokumen (grid kanan) =====
+  // ===== Dokumen =====
   const REQUIRED_TYPES = [
     "Pas Foto 3x4",
     "Scan KTP Orang Tua",
@@ -162,23 +175,24 @@ export default function ProgressDetailClient({
 
   type RequiredType = (typeof REQUIRED_TYPES)[number];
 
-  function getType(d: any) {
-    return d.Document_Type__c ?? d.Type__c ?? "";
-  }
-  function setType(d: any, v: string) {
-    if ("Document_Type__c" in d) d.Document_Type__c = v;
-    else d.Type__c = v;
-  }
-  function getLink(d: any) {
-    return d.Document_Link__c ?? d.Url__c ?? "";
-  }
-  function setLink(d: any, v: string) {
-    if ("Document_Link__c" in d) d.Document_Link__c = v;
-    else d.Url__c = v;
-  }
+  const getType = (d: Doc): string =>
+    d.Document_Type__c ?? d.Type__c ?? "";
+
+  const setType = (d: Doc, v: string): void => {
+    d.Document_Type__c = v;
+    d.Type__c = v;
+  };
+
+  const getLink = (d: Doc): string =>
+    d.Document_Link__c ?? d.Url__c ?? "";
+
+  const setLink = (d: Doc, v: string): void => {
+    d.Document_Link__c = v;
+    d.Url__c = v;
+  };
 
   const docsByType = useMemo(() => {
-    const m = new Map<string, any>();
+    const m = new Map<string, Doc>();
     for (const d of docsEdit) {
       const t = getType(d);
       if (t && !m.has(t)) m.set(t, d);
@@ -226,34 +240,23 @@ export default function ProgressDetailClient({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
-            {/* FOTO KIRI (3×4, tajam) */}
+            {/* FOTO 3×4 */}
             <div className="flex flex-col items-center">
               <div
                 className="
                   relative overflow-hidden rounded-2xl ring-1 ring-black/5 shadow
                   w-32 md:w-36
-                  aspect-[3/4]      /* kunci rasio 3:4 */
-                  bg-white
+                  aspect-[3/4] bg-white
                 "
-                // Jika arbitrary values tailwind tidak aktif, bisa pakai:
-                // style={{ aspectRatio: "3 / 4" }}
               >
-                {photoUrl ? (
-                  <img
-                    src={photoUrl}
-                    alt="Foto Siswa"
-                    className="absolute inset-0 h-full w-full object-cover object-center"
-                    loading="eager"
-                    fetchPriority="high"
-                    decoding="async"
-                  />
-                ) : (
-                  <img
-                    src="/avatar-placeholder.png"
-                    alt="Foto Siswa"
-                    className="absolute inset-0 h-full w-full object-cover object-center"
-                  />
-                )}
+                <img
+                  src={photoUrl}
+                  alt="Foto Siswa"
+                  className="absolute inset-0 h-full w-full object-cover object-center"
+                  loading="eager"
+                  fetchPriority="high"
+                  decoding="async"
+                />
               </div>
             </div>
 
@@ -275,7 +278,7 @@ export default function ProgressDetailClient({
           )}
         </div>
 
-        {/* data orang tua (gabungan/placeholder) */}
+        {/* data orang tua */}
         <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7 mb-4">
           <div className="text-base font-medium mb-3 text-slate-700">
             data orang tua
@@ -294,7 +297,7 @@ export default function ProgressDetailClient({
         </div>
       </div>
 
-      {/* KANAN: data application progress (dokumen) */}
+      {/* KANAN: dokumen */}
       <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40 p-6">
         <div className="text-lg font-semibold text-slate-700 mb-4">
           data application progres
@@ -310,7 +313,6 @@ export default function ProgressDetailClient({
                 key={type}
                 className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7"
               >
-                {/* header + status */}
                 <div className="flex items-start justify-between mb-3">
                   <div>
                     <div className="text-sm font-medium text-slate-700">
@@ -337,7 +339,6 @@ export default function ProgressDetailClient({
                   )}
                 </div>
 
-                {/* pilih tipe */}
                 <div className="mb-3">
                   <label className="block text-xs text-gray-600 mb-1">
                     Document Type
@@ -349,9 +350,8 @@ export default function ProgressDetailClient({
                       const next = e.target.value;
                       ensureDocEntryFor(type);
                       const draft = [...docsEdit];
-                      const idx = draft.findIndex(
-                        (x) => getType(x) === getType(existing ?? { Document_Type__c: type })
-                      );
+                      const needle = existing ? getType(existing) : type;
+                      const idx = draft.findIndex((x) => getType(x) === needle);
                       if (idx >= 0) setType(draft[idx], next);
                       setDocsEdit(draft);
                     }}
@@ -364,7 +364,6 @@ export default function ProgressDetailClient({
                   </select>
                 </div>
 
-                {/* input link */}
                 <div className="mb-3">
                   <label className="block text-xs text-gray-600 mb-1">
                     Document Link
@@ -375,7 +374,9 @@ export default function ProgressDetailClient({
                     onChange={(e) => {
                       ensureDocEntryFor(type);
                       const draft = [...docsEdit];
-                      const idx = draft.findIndex((x) => getType(x) === type);
+                      const idx = draft.findIndex(
+                        (x) => getType(x) === type
+                      );
                       if (idx >= 0) setLink(draft[idx], e.target.value);
                       setDocsEdit(draft);
                     }}
@@ -383,7 +384,6 @@ export default function ProgressDetailClient({
                   />
                 </div>
 
-                {/* upload/replace (placeholder, integrasi upload SF bisa ditambahkan nanti) */}
                 <div className="flex items-center justify-between gap-3">
                   <label className="text-xs text-gray-600">Upload File</label>
                   <input
