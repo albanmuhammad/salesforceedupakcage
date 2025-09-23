@@ -226,13 +226,35 @@ export default function ProgressDetailClient({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
-            {/* FOTO */}
+            {/* FOTO KIRI (3×4, tajam) */}
             <div className="flex flex-col items-center">
-              <img
-                src={photoUrl}
-                alt="Foto Siswa"
-                className="w-32 h-32 rounded-2xl object-cover shadow"
-              />
+              <div
+                className="
+                  relative overflow-hidden rounded-2xl ring-1 ring-black/5 shadow
+                  w-32 md:w-36
+                  aspect-[3/4]      /* kunci rasio 3:4 */
+                  bg-white
+                "
+                // Jika arbitrary values tailwind tidak aktif, bisa pakai:
+                // style={{ aspectRatio: "3 / 4" }}
+              >
+                {photoUrl ? (
+                  <img
+                    src={photoUrl}
+                    alt="Foto Siswa"
+                    className="absolute inset-0 h-full w-full object-cover object-center"
+                    loading="eager"
+                    fetchPriority="high"
+                    decoding="async"
+                  />
+                ) : (
+                  <img
+                    src="/avatar-placeholder.png"
+                    alt="Foto Siswa"
+                    className="absolute inset-0 h-full w-full object-cover object-center"
+                  />
+                )}
+              </div>
             </div>
 
             {/* DATA KANAN */}
