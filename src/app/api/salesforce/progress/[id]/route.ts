@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { sfQuery } from "@/lib/salesforce/client";
+import { getConn, sfQuery } from "@/lib/salesforce/client";
+import type { QueryResult } from "jsforce";
+import type {
+  AccountDocumentInsert,
+  AccountDocumentUpdate,
+} from "@/types/salesforce";
 
 type Progress = {
   Id: string;
@@ -8,6 +13,18 @@ type Progress = {
   StageName: string;
   AccountId: string | null;
 };
+
+type DocBody = {
+  Id?: string;
+  Name: string;
+  Type__c?: string | null;
+  Url__c?: string | null;
+};
+
+type PatchBody =
+  | { segment: "dokumen"; id: string; dokumen: DocBody[] }
+  | { segment: "siswa"; id: string; siswa: Record<string, unknown> }
+  | { segment: "orangTua"; id: string; orangTua: Record<string, unknown> };
 
 export async function GET(
   _: Request,
@@ -159,4 +176,91 @@ export async function GET(
       dokumen: docs,
     },
   });
+}
+
+export async function PATCH(
+  req: Request,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+  const body = (await req.json()) as PatchBody;
+
+  if (body.segment !== "dokumen" || !("dokumen" in body)) {
+    return NextResponse.json(
+      { ok: false, error: "unsupported segment" },
+      { status: 400 }
+    );
+  }
+
+  const conn = await getConn();
+
+  // 1) Kumpulkan tipe yang dikirim
+  const types = Array.from(
+    new Set(
+      body.dokumen
+        .map((d) => (d.Type__c ?? "").trim())
+        .filter((t): t is string => t.length > 0)
+    )
+  );
+
+  // 2) Query existing untuk progress + tipe-2 tsb
+  const existingByType = new Map<string, { Id: string }>();
+  if (types.length) {
+    const inList = types.map((t) => `'${t.replace(/'/g, "\\'")}'`).join(",");
+    const qRes: QueryResult<{ Id: string; Document_Type__c: string }> =
+      await conn.query(
+        `SELECT Id, Document_Type__c
+       FROM Account_Document__c
+       WHERE Application_Progress__c='${id}' AND Document_Type__c IN (${inList})`
+      );
+    for (const r of qRes.records) {
+      if (r.Document_Type__c)
+        existingByType.set(r.Document_Type__c, { Id: r.Id });
+    }
+  }
+
+  // 3) Build batch insert/update
+  const toInsert: Array<{
+    Name: string;
+    Application_Progress__c: string;
+    Document_Type__c: string;
+    Document_Link__c: string;
+  }> = [];
+
+  const toUpdate: Array<{
+    Id: string;
+    Name: string;
+    Application_Progress__c: string;
+    Document_Type__c: string;
+    Document_Link__c: string;
+  }> = [];
+
+  for (const d of body.dokumen) {
+    const type = (d.Type__c ?? "").trim();
+    if (!type) continue;
+
+    const link = (d.Url__c ?? "").trim();
+    const name = d.Name?.trim() || type || "Document";
+
+    const base = {
+      Name: name,
+      Application_Progress__c: id,
+      Document_Type__c: type,
+      Document_Link__c: link,
+    };
+
+    const existing = d.Id ? { Id: d.Id } : existingByType.get(type);
+    if (existing?.Id) {
+      toUpdate.push({ Id: existing.Id, ...base });
+    } else {
+      toInsert.push(base);
+    }
+  }
+
+  if (toUpdate.length)
+    await conn.sobject("Account_Document__c").update(toUpdate);
+  if (toInsert.length)
+    await conn.sobject("Account_Document__c").insert(toInsert);
+
+  return NextResponse.json({ ok: true });
 }

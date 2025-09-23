@@ -47,6 +47,19 @@ type ProgressDetailClientProps = {
     // cookieHeader: string;  // <-- REMOVE: do not pass cookies to the client
 };
 
+async function fileToBase64(file: File): Promise<string> {
+    const buf = await file.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+}
+
+function setLinkMutable(d: Doc, v: string) {
+    if ("Document_Link__c" in d) d.Document_Link__c = v;
+    else d.Url__c = v;
+}
+
 export default function ProgressDetailClient({
     id,
     siswa,
@@ -75,35 +88,87 @@ export default function ProgressDetailClient({
             orangTua?: Record<string, unknown>;
             dokumen?: Doc[];
         } = { segment, id };
-        if (segment === "siswa") body.siswa = siswaEdit;
-        if (segment === "orangTua") body.orangTua = ortuEdit;
-        if (segment === "dokumen") body.dokumen = docsEdit;
 
-        const res = await fetch(`${apiBase}/api/salesforce/progress/${id}`, {
-            method: "PATCH",
-            cache: "no-store",
-            credentials: "include", // <-- let the browser send cookies
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(body),
-        });
+        try {
+            if (segment === "dokumen") {
+                // 1) Upload SEMUA file pending (0..N) → dapat downloadUrl
+                const entries = Object.entries(pendingUploads) as [RequiredType, File | null][];
+                for (const [type, file] of entries) {
+                    if (!file) continue;
 
-        if (!res.ok) {
-            const t = await res.text();
-            alert(`Gagal menyimpan (${segment}): ${t}`);
-            return;
+
+
+                    const base64 = await fileToBase64(file);
+                    const res = await fetch("/api/salesforce/upload", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            filename: file.name,
+                            base64,                // hasil FileReader → base64 tanpa prefix
+                            relateToId: id,     // Application Progress (Opportunity Id)
+                            accountId: siswa.Id,      // opsional
+                            documentType: type, // sesuai RequiredType
+                        }),
+                    });
+
+                    if (!res.ok) throw new Error(await res.text());
+                    const json: { ok: boolean; downloadUrl?: string } = await res.json();
+                    if (!json.ok || !json.downloadUrl) throw new Error("Upload response invalid");
+
+                    // 2) suntik link ke docsEdit sesuai tipe
+                    setDocsEdit((prev) => {
+                        const next = [...prev];
+                        const idx = next.findIndex((d) => getType(d) === type);
+                        if (idx >= 0) {
+                            const copy = { ...next[idx] };
+                            setLinkMutable(copy, json.downloadUrl);
+                            next[idx] = copy;
+                        } else {
+                            next.push({
+                                Name: type,
+                                Document_Type__c: type,
+                                Document_Link__c: json.downloadUrl,
+                            });
+                        }
+                        return next;
+                    });
+                }
+
+                // 3) Kirim seluruh dokumen (sudah ter-update) sekali ke server
+                body.dokumen = docsEdit;
+            } else if (segment === "siswa") {
+                body.siswa = siswaEdit;
+            } else if (segment === "orangTua") {
+                body.orangTua = ortuEdit;
+            }
+
+            const res = await fetch(`${apiBase}/api/salesforce/progress/${id}`, {
+                method: "PATCH",
+                cache: "no-store",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error(await res.text());
+
+            // reset originals & pending
+            if (segment === "dokumen") {
+                (originalDocs as Doc[]).length = 0;
+                (originalDocs as Doc[]).push(...JSON.parse(JSON.stringify(docsEdit)));
+                setPendingUploads({});
+            } else if (segment === "siswa") {
+                Object.assign(originalSiswa as object, JSON.parse(JSON.stringify(siswaEdit)));
+            } else if (segment === "orangTua") {
+                Object.assign(originalIbuAyah as object, JSON.parse(JSON.stringify(ortuEdit)));
+            }
+
+            alert("Berhasil disimpan.");
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : "Gagal menyimpan.";
+            alert(msg);
         }
-
-        // reset originals (mutate in place so ref stays stable)
-        if (segment === "siswa") Object.assign(originalSiswa as object, deepClone(siswaEdit));
-        if (segment === "orangTua") Object.assign(originalIbuAyah as object, deepClone(ortuEdit));
-        if (segment === "dokumen") {
-            (originalDocs as Doc[]).length = 0;
-            (originalDocs as Doc[]).push(...deepClone(docsEdit));
-        }
-        alert("Berhasil disimpan.");
     }
+
 
     // ----- UI helpers -----
     function renderObjectEditor(
@@ -278,14 +343,7 @@ export default function ProgressDetailClient({
                                     <select
                                         className="w-full border rounded px-3 py-2 text-sm bg-gray-50"
                                         value={existing ? getType(existing) : type}
-                                        onChange={(e) => {
-                                            const next = e.target.value;
-                                            ensureDocEntryFor(type);
-                                            const draft = [...docsEdit];
-                                            const idx = draft.findIndex((x) => getType(x) === getType(existing ?? { Document_Type__c: type } as Doc));
-                                            if (idx >= 0) setType(draft[idx], next);
-                                            setDocsEdit(draft);
-                                        }}
+                                        disabled
                                     >
                                         {REQUIRED_TYPES.map((opt) => (
                                             <option key={opt} value={opt}>
