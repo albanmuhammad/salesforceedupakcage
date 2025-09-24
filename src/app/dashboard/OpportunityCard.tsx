@@ -63,8 +63,8 @@ export default function OpportunityCard({
                 opp: { Id: string; StageName?: string | null; Web_Stage__c?: string | null };
             };
             return updated.opp;
-        } catch (e: any) {
-            setError(e?.message || "Failed to activate");
+        } catch (e: unknown) {
+            setError(e instanceof Error ? e.message : "Failed to activate");
             throw e;
         } finally {
             setLoading(false);

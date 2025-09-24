@@ -149,7 +149,7 @@ export default function ProgressDetailClient({
                         const idx = next.findIndex((d) => getType(d) === type);
                         if (idx >= 0) {
                             const copy = { ...next[idx] };
-                            setLinkMutable(copy, json.downloadUrl);
+                            setLinkMutable(copy, json.downloadUrl || "");
                             next[idx] = copy;
                         } else {
                             next.push({
@@ -187,7 +187,7 @@ export default function ProgressDetailClient({
             } else if (segment === "siswa") {
                 Object.assign(originalSiswa as object, JSON.parse(JSON.stringify(siswaEdit)));
             } else if (segment === "orangTua") {
-                Object.assign(originalIbuAyah as object, JSON.parse(JSON.stringify(ortuEdit)));
+                Object.assign(originalOrtu as object, JSON.parse(JSON.stringify(ortuEdit)));
             }
 
             alert("Berhasil disimpan.");
@@ -518,6 +518,11 @@ export default function ProgressDetailClient({
                                         }}
                                     />
                                 </div>
+                                {pendingUploads[type] && (
+                                    <div className="text-xs text-gray-600 mt-2 break-words">
+                                        Selected: {pendingUploads[type]?.name}
+                                    </div>
+                                )}
                             </div>
                         );
                     })}

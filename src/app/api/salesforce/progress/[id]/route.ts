@@ -14,6 +14,13 @@ type Progress = {
   AccountId: string | null;
 };
 
+type OpportunityRecord = {
+  Id: string;
+  Is_Active__c?: boolean;
+  StageName?: string | null;
+  Web_Stage__c?: string | null;
+};
+
 type AccountInfo = {
   Id: string;
   Name: string;
@@ -343,7 +350,10 @@ export async function PATCH(
   switch (body.segment) {
     case "activate": {
       try {
-        const cur = (await conn.sobject("Opportunity").retrieve(id)) as any;
+        const cur = (await conn
+          .sobject("Opportunity")
+          .retrieve(id)) as OpportunityRecord;
+
         if (!cur?.Id) {
           return NextResponse.json(
             { ok: false, error: "not_found" },
@@ -364,7 +374,10 @@ export async function PATCH(
           }
         }
 
-        const q = (await conn.sobject("Opportunity").retrieve(id)) as any;
+        const q = (await conn
+          .sobject("Opportunity")
+          .retrieve(id)) as OpportunityRecord;
+
         const opp = {
           Id: q.Id as string,
           StageName: (q.StageName ?? null) as string | null,
@@ -373,9 +386,11 @@ export async function PATCH(
         };
 
         return NextResponse.json({ ok: true, opp });
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errorMessage =
+          err instanceof Error ? err.message : "internal_error";
         return NextResponse.json(
-          { ok: false, error: err?.message || "internal_error" },
+          { ok: false, error: errorMessage },
           { status: 500 }
         );
       }
@@ -383,9 +398,10 @@ export async function PATCH(
 
     case "dokumen": {
       // ---- pindahan logic dokumen masuk sini ----
-      const docs = Array.isArray((body as any).dokumen)
-        ? ((body as any).dokumen as DocBody[])
-        : null;
+      const docs =
+        body.segment === "dokumen" && Array.isArray(body.dokumen)
+          ? body.dokumen
+          : null;
       if (!docs) {
         return NextResponse.json(
           { ok: false, error: "invalid_payload_dokumen" },
