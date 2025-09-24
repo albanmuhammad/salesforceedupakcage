@@ -24,7 +24,8 @@ type DocBody = {
 type PatchBody =
   | { segment: "dokumen"; id: string; dokumen: DocBody[] }
   | { segment: "siswa"; id: string; siswa: Record<string, unknown> }
-  | { segment: "orangTua"; id: string; orangTua: Record<string, unknown> };
+  | { segment: "orangTua"; id: string; orangTua: Record<string, unknown> }
+  | { segment: "activate" };
 
 export async function GET(
   _: Request,
@@ -185,82 +186,156 @@ export async function PATCH(
   const { id } = await ctx.params;
   const body = (await req.json()) as PatchBody;
 
-  if (body.segment !== "dokumen" || !("dokumen" in body)) {
+  // ✅ auth sama seperti GET
+  const supabase = await createClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData?.user?.id) {
     return NextResponse.json(
-      { ok: false, error: "unsupported segment" },
-      { status: 400 }
+      { ok: false, error: "unauthorized" },
+      { status: 401 }
     );
   }
 
   const conn = await getConn();
 
-  // 1) Kumpulkan tipe yang dikirim
-  const types = Array.from(
-    new Set(
-      body.dokumen
-        .map((d) => (d.Type__c ?? "").trim())
-        .filter((t): t is string => t.length > 0)
-    )
-  );
+  switch (body.segment) {
+    case "activate": {
+      try {
+        const cur = (await conn.sobject("Opportunity").retrieve(id)) as any;
+        if (!cur?.Id) {
+          return NextResponse.json(
+            { ok: false, error: "not_found" },
+            { status: 404 }
+          );
+        }
 
-  // 2) Query existing untuk progress + tipe-2 tsb
-  const existingByType = new Map<string, { Id: string }>();
-  if (types.length) {
-    const inList = types.map((t) => `'${t.replace(/'/g, "\\'")}'`).join(",");
-    const qRes: QueryResult<{ Id: string; Document_Type__c: string }> =
-      await conn.query(
-        `SELECT Id, Document_Type__c
-       FROM Account_Document__c
-       WHERE Application_Progress__c='${id}' AND Document_Type__c IN (${inList})`
+        if (!cur.Is_Active__c) {
+          const upd = await conn.sobject("Opportunity").update({
+            Id: id,
+            Is_Active__c: true,
+          });
+          if (!upd.success) {
+            return NextResponse.json(
+              { ok: false, error: "sf_update_failed" },
+              { status: 500 }
+            );
+          }
+        }
+
+        const q = (await conn.sobject("Opportunity").retrieve(id)) as any;
+        const opp = {
+          Id: q.Id as string,
+          StageName: (q.StageName ?? null) as string | null,
+          Web_Stage__c: (q.Web_Stage__c ?? null) as string | null,
+          Is_Active__c: !!q.Is_Active__c,
+        };
+
+        return NextResponse.json({ ok: true, opp });
+      } catch (err: any) {
+        return NextResponse.json(
+          { ok: false, error: err?.message || "internal_error" },
+          { status: 500 }
+        );
+      }
+    }
+
+    case "dokumen": {
+      // ---- pindahan logic dokumen masuk sini ----
+      const docs = Array.isArray((body as any).dokumen)
+        ? ((body as any).dokumen as DocBody[])
+        : null;
+      if (!docs) {
+        return NextResponse.json(
+          { ok: false, error: "invalid_payload_dokumen" },
+          { status: 400 }
+        );
+      }
+
+      // 1) kumpulkan types
+      const types = Array.from(
+        new Set(
+          docs
+            .map((d) => (d.Type__c ?? "").trim())
+            .filter((t): t is string => t.length > 0)
+        )
       );
-    for (const r of qRes.records) {
-      if (r.Document_Type__c)
-        existingByType.set(r.Document_Type__c, { Id: r.Id });
+
+      // 2) query existing untuk progress + tipe-2 tsb
+      const existingByType = new Map<string, { Id: string }>();
+      if (types.length) {
+        const inList = types
+          .map((t) => `'${t.replace(/'/g, "\\'")}'`)
+          .join(",");
+        const qRes: QueryResult<{ Id: string; Document_Type__c: string }> =
+          await conn.query(
+            `SELECT Id, Document_Type__c
+             FROM Account_Document__c
+             WHERE Application_Progress__c='${id}' AND Document_Type__c IN (${inList})`
+          );
+        for (const r of qRes.records) {
+          if (r.Document_Type__c)
+            existingByType.set(r.Document_Type__c, { Id: r.Id });
+        }
+      }
+
+      // 3) build batch
+      const toInsert: Array<{
+        Name: string;
+        Application_Progress__c: string;
+        Document_Type__c: string;
+        Document_Link__c: string;
+      }> = [];
+
+      const toUpdate: Array<{
+        Id: string;
+        Name: string;
+        Application_Progress__c: string;
+        Document_Type__c: string;
+        Document_Link__c: string;
+      }> = [];
+
+      for (const d of docs) {
+        const type = (d.Type__c ?? "").trim();
+        if (!type) continue;
+
+        const link = (d.Url__c ?? "").trim();
+        const name = d.Name?.trim() || type || "Document";
+
+        const base = {
+          Name: name,
+          Application_Progress__c: id,
+          Document_Type__c: type,
+          Document_Link__c: link,
+        };
+
+        const existing = d.Id ? { Id: d.Id } : existingByType.get(type);
+        if (existing?.Id) {
+          toUpdate.push({ Id: existing.Id, ...base });
+        } else {
+          toInsert.push(base);
+        }
+      }
+
+      if (toUpdate.length)
+        await conn.sobject("Account_Document__c").update(toUpdate);
+      if (toInsert.length)
+        await conn.sobject("Account_Document__c").insert(toInsert);
+
+      return NextResponse.json({ ok: true });
     }
+
+    // siapkan slot untuk masa depan
+    case "siswa":
+    case "orangTua":
+      return NextResponse.json(
+        { ok: false, error: "unsupported segment (coming soon)" },
+        { status: 400 }
+      );
+
+    default:
+      return NextResponse.json(
+        { ok: false, error: "unsupported segment" },
+        { status: 400 }
+      );
   }
-
-  // 3) Build batch insert/update
-  const toInsert: Array<{
-    Name: string;
-    Application_Progress__c: string;
-    Document_Type__c: string;
-    Document_Link__c: string;
-  }> = [];
-
-  const toUpdate: Array<{
-    Id: string;
-    Name: string;
-    Application_Progress__c: string;
-    Document_Type__c: string;
-    Document_Link__c: string;
-  }> = [];
-
-  for (const d of body.dokumen) {
-    const type = (d.Type__c ?? "").trim();
-    if (!type) continue;
-
-    const link = (d.Url__c ?? "").trim();
-    const name = d.Name?.trim() || type || "Document";
-
-    const base = {
-      Name: name,
-      Application_Progress__c: id,
-      Document_Type__c: type,
-      Document_Link__c: link,
-    };
-
-    const existing = d.Id ? { Id: d.Id } : existingByType.get(type);
-    if (existing?.Id) {
-      toUpdate.push({ Id: existing.Id, ...base });
-    } else {
-      toInsert.push(base);
-    }
-  }
-
-  if (toUpdate.length)
-    await conn.sobject("Account_Document__c").update(toUpdate);
-  if (toInsert.length)
-    await conn.sobject("Account_Document__c").insert(toInsert);
-
-  return NextResponse.json({ ok: true });
 }
