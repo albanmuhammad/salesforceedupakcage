@@ -17,6 +17,11 @@ type AccountInfo = {
   PersonBirthdate?: string | null;
   IsPersonAccount?: boolean;
   PersonContactId?: string | null;
+
+  // Tambahan agar bisa ditampilkan di UI
+  Phone?: string | null;
+  Master_School__c?: string | null;        // ← tambah (lookup Id)
+  Master_School__r?: { Name?: string | null } | null; // ← tambah (lookup name)
 };
 
 type DocRow = {
@@ -49,6 +54,7 @@ export async function GET(
   const url = new URL(req.url);
   const debug = url.searchParams.get("debug") === "1";
 
+  // --- Auth (Supabase) ---
   const supabase = await createClient();
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   if (userErr || !userData?.user?.email) {
@@ -57,6 +63,7 @@ export async function GET(
   }
   const userEmail = userData.user.email.toLowerCase();
 
+  // --- Params ---
   const { id: rawId } = await ctx.params;
   const id = String(rawId).replace(/'/g, "\\'");
   console.log(`[${traceId}] HIT /api/salesforce/progress/${id} as ${userEmail}`);
@@ -79,13 +86,14 @@ export async function GET(
     accountId: progress.AccountId,
   });
 
-  // 2) Validasi akses + ambil Account minimal
+  // 2) Validasi akses + ambil Account minimal (sekaligus Phone & School__c)
   let allowed = false;
   let siswaAccount: AccountInfo | null = null;
 
   if (progress.AccountId) {
     const accRows = await sfQuery<AccountInfo>(`
-      SELECT Id, Name, PersonEmail, PersonBirthdate, IsPersonAccount, PersonContactId
+      SELECT Id, Name, PersonEmail, PersonBirthdate, IsPersonAccount, PersonContactId,
+             Phone, Master_School__c, Master_School__r.Name
       FROM Account
       WHERE Id='${progress.AccountId}'
       LIMIT 1
@@ -98,6 +106,8 @@ export async function GET(
       personEmail: account?.PersonEmail,
       isPerson: account?.IsPersonAccount,
       personContactId: account?.PersonContactId,
+      phone: account?.Phone,
+      school: account?.Master_School__c,
     });
 
     if (account) {
@@ -223,14 +233,14 @@ export async function GET(
     })));
   }
 
-  // Pilih judul mengandung "pas foto", kalau tidak ada ambil entry terbaru
+  // Pilih judul yang mengandung "pas foto", kalau tidak ada ambil entry terbaru
   const photo =
     cdl.find(x => (x.ContentDocument.Title || "").toLowerCase().includes("pas foto")) ||
     cdl[0];
 
   let photoVersionId: string | null = photo?.ContentDocument.LatestPublishedVersionId || null;
 
-  // (opsional) fallback pastikan latest via ContentVersion
+  // (opsional) fallback: pastikan latest via ContentVersion
   if (!photoVersionId && cdl.length) {
     const docIds = cdl.map(r => `'${r.ContentDocumentId}'`).join(",");
     const versions = await sfQuery<VersionRow>(`

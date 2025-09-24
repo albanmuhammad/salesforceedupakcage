@@ -14,7 +14,6 @@ type Doc = {
 function deepClone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v));
 }
-
 function isPrimitive(v: unknown): v is string | number | boolean | null {
   return (
     typeof v === "string" ||
@@ -23,10 +22,16 @@ function isPrimitive(v: unknown): v is string | number | boolean | null {
     v === null
   );
 }
-
 function diff(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) !== JSON.stringify(b);
 }
+
+const LABELS: Record<string, string> = {
+  Name: "Name",
+  PersonEmail: "Person Email",
+  PersonBirthdate: "Person Birthdate",
+  Phone: "Phone",
+};
 
 export default function ProgressDetailClient({
   id,
@@ -102,7 +107,31 @@ export default function ProgressDetailClient({
     alert("Berhasil disimpan.");
   }
 
-  // ===== UI helpers =====
+  // ===== Readonly rules =====
+  // - Name & PersonEmail selalu readonly
+  // - Phone readonly HANYA kalau sudah ada nilainya; kalau kosong -> editable
+  function isReadOnly(key: string, val: unknown) {
+    if (key === "Name" || key === "PersonEmail") return true;
+    if (key === "Phone") return String(val ?? "").trim() !== "";
+    return false;
+  }
+
+  // Keys yang disembunyikan dari editor generik
+  const HIDDEN_KEYS = [
+    "Id",
+    "PhotoUrl",
+    "IsPersonAccount",
+    "PersonContactId",
+    "Master_School__c",   // ditangani custom sebagai "School" (name)
+    "Master_School__r",   // ditangani custom sebagai "School" (name)
+  ];
+
+  // Ambil School Name dari payload siswa
+  const schoolName =
+    (siswaEdit?.["Master_School__r"] as { Name?: string } | undefined)?.Name ??
+    String(siswaEdit?.["Master_School__c"] ?? "");
+
+  // ===== Editor generik (dengan readonly dinamis) =====
   function renderObjectEditor(
     obj: Record<string, unknown>,
     setObj: (v: Record<string, unknown>) => void,
@@ -122,26 +151,45 @@ export default function ProgressDetailClient({
 
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {entries.map(([key, val]) => (
-          <label key={key} className="flex flex-col text-sm">
-            <span className="mb-1 text-gray-600">{key}</span>
-            {typeof val === "boolean" ? (
-              <select
-                className="border rounded px-3 py-2"
-                value={String(val)}
-                onChange={(e) =>
-                  setObj({
-                    ...(obj as Record<string, unknown>),
-                    [key]: e.target.value === "true",
-                  })
-                }
-              >
-                <option value="true">true</option>
-                <option value="false">false</option>
-              </select>
-            ) : (
+        {entries.map(([key, val]) => {
+          const readOnly = isReadOnly(key, val);
+          const roCls = readOnly
+            ? "bg-gray-100 text-gray-500 cursor-not-allowed"
+            : "";
+
+          // boolean → select (ikut readonly jika perlu)
+          if (typeof val === "boolean") {
+            return (
+              <label key={key} className="flex flex-col text-sm">
+                <span className="mb-1 text-gray-600">{LABELS[key] ?? key}</span>
+                <select
+                  className={`border rounded px-3 py-2 ${roCls}`}
+                  value={String(val)}
+                  onChange={(e) =>
+                    setObj({
+                      ...(obj as Record<string, unknown>),
+                      [key]: e.target.value === "true",
+                    })
+                  }
+                  disabled={readOnly}
+                >
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+            );
+          }
+
+          // Birthdate → input date (selalu editable)
+          const isBirthdate = key === "PersonBirthdate";
+          const inputType = isBirthdate ? "date" : "text";
+
+          return (
+            <label key={key} className="flex flex-col text-sm">
+              <span className="mb-1 text-gray-600">{LABELS[key] ?? key}</span>
               <input
-                className="border rounded px-3 py-2"
+                type={inputType}
+                className={`border rounded px-3 py-2 ${readOnly ? roCls : ""}`}
                 value={String(val ?? "")}
                 onChange={(e) =>
                   setObj({
@@ -149,15 +197,18 @@ export default function ProgressDetailClient({
                     [key]: e.target.value,
                   })
                 }
+                readOnly={readOnly && !isBirthdate}
+                disabled={readOnly && !isBirthdate}
+                placeholder={isBirthdate ? "yyyy-mm-dd" : undefined}
               />
-            )}
-          </label>
-        ))}
+            </label>
+          );
+        })}
       </div>
     );
   }
 
-  // ===== Dokumen =====
+  // ===== Dokumen (kanan) =====
   const REQUIRED_TYPES = [
     "Pas Foto 3x4",
     "Scan KTP Orang Tua",
@@ -175,17 +226,12 @@ export default function ProgressDetailClient({
 
   type RequiredType = (typeof REQUIRED_TYPES)[number];
 
-  const getType = (d: Doc): string =>
-    d.Document_Type__c ?? d.Type__c ?? "";
-
+  const getType = (d: Doc): string => d.Document_Type__c ?? d.Type__c ?? "";
   const setType = (d: Doc, v: string): void => {
     d.Document_Type__c = v;
     d.Type__c = v;
   };
-
-  const getLink = (d: Doc): string =>
-    d.Document_Link__c ?? d.Url__c ?? "";
-
+  const getLink = (d: Doc): string => d.Document_Link__c ?? d.Url__c ?? "";
   const setLink = (d: Doc, v: string): void => {
     d.Document_Link__c = v;
     d.Url__c = v;
@@ -262,7 +308,21 @@ export default function ProgressDetailClient({
 
             {/* DATA KANAN */}
             <div className="md:col-span-2">
-              {renderObjectEditor(siswaEdit, setSiswaEdit, ["Id", "PhotoUrl"])}
+              {/* Editor generik (Name, PersonEmail readonly; Phone dinamis; Birthdate editable) */}
+              {renderObjectEditor(siswaEdit, setSiswaEdit, HIDDEN_KEYS)}
+
+              {/* School (lookup): tampilkan nama saja (readonly) */}
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="flex flex-col text-sm">
+                  <span className="mb-1 text-gray-600">School</span>
+                  <input
+                    className="border rounded px-3 py-2 bg-gray-100 text-gray-600 cursor-not-allowed"
+                    value={schoolName}
+                    readOnly
+                    disabled
+                  />
+                </label>
+              </div>
             </div>
           </div>
 
@@ -283,7 +343,9 @@ export default function ProgressDetailClient({
           <div className="text-base font-medium mb-3 text-slate-700">
             data orang tua
           </div>
-          {renderObjectEditor(ortuEdit, setOrtuEdit)}
+          {/* kalau nanti ada field, editor generik akan menampilkannya */}
+          {/* saat ini kemungkinan kosong */}
+          {renderObjectEditor(ortuEdit, setOrtuEdit, [])}
           {ortuDirty && (
             <div className="flex justify-end mt-4">
               <button
@@ -374,9 +436,7 @@ export default function ProgressDetailClient({
                     onChange={(e) => {
                       ensureDocEntryFor(type);
                       const draft = [...docsEdit];
-                      const idx = draft.findIndex(
-                        (x) => getType(x) === type
-                      );
+                      const idx = draft.findIndex((x) => getType(x) === type);
                       if (idx >= 0) setLink(draft[idx], e.target.value);
                       setDocsEdit(draft);
                     }}
