@@ -83,7 +83,7 @@ export default function LoginPage() {
                         Don’t have an account yet?{" "}
                         <a
                             className="text-blue-600 font-medium hover:underline"
-                            href="https://metro-seven-web-to-lead.vercel.app/register.html"
+                            href="https://edudevsite.vercel.app/register.html"
                         >
                             Register
                         </a>

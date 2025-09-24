@@ -78,7 +78,7 @@ export default function OpportunityCard({
             router.push(`/progress/${oppId}`);
         } else {
             // external
-            window.location.href = `https://edudevsite.vercel.app/${oppId}`;
+            window.location.href = `https://edudevsite.vercel.app/register.html?opp=${oppId}`;
         }
     }
 
