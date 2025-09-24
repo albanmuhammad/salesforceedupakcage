@@ -3,11 +3,10 @@
 import { useMemo, useState } from "react";
 
 type Doc = {
-    Id?: string; // <-- optional so drafts are valid
-    Name: string;
+    Id?: string;
+    Name?: string;
     Type__c?: string | null;
     Url__c?: string | null;
-    // optionally support alt schema when it comes from API:
     Document_Type__c?: string | null;
     Document_Link__c?: string | null;
 };
@@ -15,12 +14,24 @@ type Doc = {
 function deepClone<T>(v: T): T {
     return JSON.parse(JSON.stringify(v));
 }
-function isPrimitive(v: unknown) {
-    return typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null;
+function isPrimitive(v: unknown): v is string | number | boolean | null {
+    return (
+        typeof v === "string" ||
+        typeof v === "number" ||
+        typeof v === "boolean" ||
+        v === null
+    );
 }
-function diff(a: unknown, b: unknown) {
+function diff(a: unknown, b: unknown): boolean {
     return JSON.stringify(a) !== JSON.stringify(b);
 }
+
+const LABELS: Record<string, string> = {
+    Name: "Name",
+    PersonEmail: "Person Email",
+    PersonBirthdate: "Person Birthdate",
+    Phone: "Phone",
+};
 
 const REQUIRED_TYPES = [
     "Pas Foto 3x4",
@@ -66,18 +77,35 @@ export default function ProgressDetailClient({
     orangTua,
     dokumen,
     apiBase,
-}: ProgressDetailClientProps) {
-    // ----- STATE (original vs edited) -----
+    cookieHeader,
+    photoVersionId,
+}: {
+    id: string;
+    siswa: Record<string, unknown>;
+    orangTua: Record<string, unknown>;
+    dokumen: Doc[];
+    apiBase: string;
+    cookieHeader: string;
+    photoVersionId: string | null;
+}) {
+    // ===== FOTO =====
+    const photoUrl = photoVersionId
+        ? `${apiBase}/api/salesforce/files/version/${photoVersionId}/data`
+        : "/default-avatar.png";
+
+    // ===== STATE =====
     const originalSiswa = useMemo(() => deepClone(siswa), [siswa]);
-    const originalIbuAyah = useMemo(() => deepClone(orangTua), [orangTua]);
+    const originalOrtu = useMemo(() => deepClone(orangTua), [orangTua]);
     const originalDocs = useMemo(() => deepClone(dokumen), [dokumen]);
 
-    const [siswaEdit, setSiswaEdit] = useState<Record<string, unknown>>(deepClone(siswa));
-    const [ortuEdit, setOrtuEdit] = useState<Record<string, unknown>>(deepClone(orangTua));
+    const [siswaEdit, setSiswaEdit] =
+        useState<Record<string, unknown>>(deepClone(siswa));
+    const [ortuEdit, setOrtuEdit] =
+        useState<Record<string, unknown>>(deepClone(orangTua));
     const [docsEdit, setDocsEdit] = useState<Doc[]>(deepClone(dokumen));
 
     const siswaDirty = diff(originalSiswa, siswaEdit);
-    const ortuDirty = diff(originalIbuAyah, ortuEdit);
+    const ortuDirty = diff(originalOrtu, ortuEdit);
 
     // ----- SAVE handlers (panggil API sesuai segment) -----
     async function saveSegment(segment: "siswa" | "orangTua" | "dokumen") {
@@ -170,61 +198,136 @@ export default function ProgressDetailClient({
     }
 
 
-    // ----- UI helpers -----
+    // ===== Readonly rules =====
+    // - Name & PersonEmail selalu readonly
+    // - Phone readonly HANYA kalau sudah ada nilainya; kalau kosong -> editable
+    function isReadOnly(key: string, val: unknown) {
+        if (key === "Name" || key === "PersonEmail") return true;
+        if (key === "Phone") return String(val ?? "").trim() !== "";
+        return false;
+    }
+
+    // Keys yang disembunyikan dari editor generik
+    const HIDDEN_KEYS = [
+        "Id",
+        "PhotoUrl",
+        "IsPersonAccount",
+        "PersonContactId",
+        "Master_School__c",   // ditangani custom sebagai "School" (name)
+        "Master_School__r",   // ditangani custom sebagai "School" (name)
+    ];
+
+    // Ambil School Name dari payload siswa
+    const schoolName =
+        (siswaEdit?.["Master_School__r"] as { Name?: string } | undefined)?.Name ??
+        String(siswaEdit?.["Master_School__c"] ?? "");
+
+    // ===== Editor generik (dengan readonly dinamis) =====
     function renderObjectEditor(
         obj: Record<string, unknown>,
         setObj: (v: Record<string, unknown>) => void,
         omitKeys: string[] = []
     ) {
-        const entries = Object.entries(obj).filter(([k, v]) => !omitKeys.includes(k) && isPrimitive(v));
+        const entries = Object.entries(obj).filter(
+            ([k, v]) => !omitKeys.includes(k) && isPrimitive(v)
+        );
+
         if (entries.length === 0) {
-            return <div className="text-sm text-gray-500">Tidak ada field yang dapat diedit.</div>;
+            return (
+                <div className="text-sm text-gray-500">
+                    Tidak ada field yang dapat diedit.
+                </div>
+            );
         }
 
         return (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {entries.map(([key, val]) => (
-                    <label key={key} className="flex flex-col text-sm">
-                        <span className="mb-1 text-gray-600">{key}</span>
-                        {typeof val === "boolean" ? (
-                            <select
-                                className="border rounded px-3 py-2"
-                                value={String(val)}
-                                onChange={(e) => setObj({ ...obj, [key]: e.target.value === "true" })}
-                            >
-                                <option value="true">true</option>
-                                <option value="false">false</option>
-                            </select>
-                        ) : (
+                {entries.map(([key, val]) => {
+                    const readOnly = isReadOnly(key, val);
+                    const roCls = readOnly
+                        ? "bg-gray-100 text-gray-500 cursor-not-allowed"
+                        : "";
+
+                    // boolean → select (ikut readonly jika perlu)
+                    if (typeof val === "boolean") {
+                        return (
+                            <label key={key} className="flex flex-col text-sm">
+                                <span className="mb-1 text-gray-600">{LABELS[key] ?? key}</span>
+                                <select
+                                    className={`border rounded px-3 py-2 ${roCls}`}
+                                    value={String(val)}
+                                    onChange={(e) =>
+                                        setObj({
+                                            ...(obj as Record<string, unknown>),
+                                            [key]: e.target.value === "true",
+                                        })
+                                    }
+                                    disabled={readOnly}
+                                >
+                                    <option value="true">true</option>
+                                    <option value="false">false</option>
+                                </select>
+                            </label>
+                        );
+                    }
+
+                    // Birthdate → input date (selalu editable)
+                    const isBirthdate = key === "PersonBirthdate";
+                    const inputType = isBirthdate ? "date" : "text";
+
+                    return (
+                        <label key={key} className="flex flex-col text-sm">
+                            <span className="mb-1 text-gray-600">{LABELS[key] ?? key}</span>
                             <input
-                                className="border rounded px-3 py-2"
-                                value={(val as string | number | null | undefined) ?? ""}
-                                onChange={(e) => setObj({ ...obj, [key]: e.target.value })}
+                                type={inputType}
+                                className={`border rounded px-3 py-2 ${readOnly ? roCls : ""}`}
+                                value={String(val ?? "")}
+                                onChange={(e) =>
+                                    setObj({
+                                        ...(obj as Record<string, unknown>),
+                                        [key]: e.target.value,
+                                    })
+                                }
+                                readOnly={readOnly && !isBirthdate}
+                                disabled={readOnly && !isBirthdate}
+                                placeholder={isBirthdate ? "yyyy-mm-dd" : undefined}
                             />
-                        )}
-                    </label>
-                ))}
+                        </label>
+                    );
+                })}
             </div>
         );
     }
 
-    // Normalisasi key agar kompatibel dua skema field
-    function getType(d: Doc) {
-        return d.Document_Type__c ?? d.Type__c ?? "";
-    }
-    function setType(d: Doc, v: string) {
-        if ("Document_Type__c" in d) d.Document_Type__c = v;
-        else d.Type__c = v;
-    }
-    function getLink(d: Doc) {
-        return d.Document_Link__c ?? d.Url__c ?? "";
-    }
-    function setLink(d: Doc, v: string) {
-        if ("Document_Link__c" in d) d.Document_Link__c = v;
-        else d.Url__c = v;
-    }
+    // ===== Dokumen (kanan) =====
+    const REQUIRED_TYPES = [
+        "Pas Foto 3x4",
+        "Scan KTP Orang Tua",
+        "Rapor 1",
+        "Rapor 2",
+        "Rapor 3",
+        "Scan KTP",
+        "Scan Ijazah",
+        "Scan Akte Kelahiran",
+        "Scan Form Tata Tertib",
+        "Scan Kartu Keluarga",
+        "Scan Surat Sehat",
+        "Lainnya",
+    ] as const;
 
-    // petakan existing docs by type (ambil yang pertama per tipe)
+    type RequiredType = (typeof REQUIRED_TYPES)[number];
+
+    const getType = (d: Doc): string => d.Document_Type__c ?? d.Type__c ?? "";
+    const setType = (d: Doc, v: string): void => {
+        d.Document_Type__c = v;
+        d.Type__c = v;
+    };
+    const getLink = (d: Doc): string => d.Document_Link__c ?? d.Url__c ?? "";
+    const setLink = (d: Doc, v: string): void => {
+        d.Document_Link__c = v;
+        d.Url__c = v;
+    };
+
     const docsByType = useMemo(() => {
         const m = new Map<string, Doc>();
         for (const d of docsEdit) {
@@ -234,24 +337,24 @@ export default function ProgressDetailClient({
         return m;
     }, [docsEdit]);
 
-    // simpan file yang dipilih user sebelum diupload (key = RequiredType)
-    const [pendingUploads, setPendingUploads] = useState<Partial<Record<RequiredType, File | null>>>({});
+    const [pendingUploads, setPendingUploads] = useState<
+        Record<string, File | null>
+    >({});
 
-    // perubahan dokumen dihitung dari docsEdit atau pendingUploads
-    const docsDirty = diff(originalDocs, docsEdit) || Object.values(pendingUploads).some(Boolean);
+    const docsDirty =
+        diff(originalDocs, docsEdit) ||
+        Object.values(pendingUploads).some(Boolean);
 
-    // handler pilih file
     function onPickFile(type: RequiredType, file: File | null) {
         setPendingUploads((prev) => ({ ...prev, [type]: file }));
     }
 
-    // opsional: bila ingin langsung membuat/replace item dokumen di state agar tombol Save aktif
     function ensureDocEntryFor(type: RequiredType) {
         const existing = docsByType.get(type);
         if (existing) return;
         const draft = [...docsEdit];
         draft.push({
-            // Id omitted on purpose for "new"
+            Id: undefined,
             Name: type,
             Document_Type__c: type,
             Document_Link__c: "",
@@ -263,58 +366,95 @@ export default function ProgressDetailClient({
         <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
             {/* KIRI: data account */}
             <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40 p-6">
-                <div className="text-lg font-semibold text-slate-700 mb-4">data account</div>
+                <div className="text-lg font-semibold text-slate-700 mb-4">
+                    data account
+                </div>
 
                 {/* data siswa */}
                 <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7 mb-4">
-                    <div className="text-base font-medium mb-3 text-slate-700">data siswa</div>
+                    <div className="text-base font-medium mb-3 text-slate-700">
+                        data siswa
+                    </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+                        {/* FOTO 3×4 */}
                         <div className="flex flex-col items-center">
-                            <img
-                                src="/default-avatar.png"
-                                alt="Foto Siswa"
-                                className="w-32 h-32 rounded-2xl object-cover shadow"
-                            />
+                            <div
+                                className="
+                  relative overflow-hidden rounded-2xl ring-1 ring-black/5 shadow
+                  w-32 md:w-36
+                  aspect-[3/4] bg-white
+                "
+                            >
+                                <img
+                                    src={photoUrl}
+                                    alt="Foto Siswa"
+                                    className="absolute inset-0 h-full w-full object-cover object-center"
+                                    loading="eager"
+                                    fetchPriority="high"
+                                    decoding="async"
+                                />
+                            </div>
                         </div>
 
+                        {/* DATA KANAN */}
                         <div className="md:col-span-2">
-                            {renderObjectEditor(siswaEdit, setSiswaEdit, ["Id", "PhotoUrl"])}
+                            {/* Editor generik (Name, PersonEmail readonly; Phone dinamis; Birthdate editable) */}
+                            {renderObjectEditor(siswaEdit, setSiswaEdit, HIDDEN_KEYS)}
+
+                            {/* School (lookup): tampilkan nama saja (readonly) */}
+                            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <label className="flex flex-col text-sm">
+                                    <span className="mb-1 text-gray-600">School</span>
+                                    <input
+                                        className="border rounded px-3 py-2 bg-gray-100 text-gray-600 cursor-not-allowed"
+                                        value={schoolName}
+                                        readOnly
+                                        disabled
+                                    />
+                                </label>
+                            </div>
                         </div>
                     </div>
 
                     {siswaDirty && (
                         <div className="flex justify-end mt-4">
-                            <button className="px-4 py-2 rounded-lg bg-black text-white shadow" onClick={() => saveSegment("siswa")}>
+                            <button
+                                className="px-4 py-2 rounded-lg bg-black text-white shadow"
+                                onClick={() => saveSegment("siswa")}
+                            >
                                 Save
                             </button>
                         </div>
                     )}
                 </div>
 
-                {/* data ibu */}
+                {/* data orang tua */}
                 <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7 mb-4">
-                    <div className="text-base font-medium mb-3 text-slate-700">data ibu</div>
-                    {renderObjectEditor(ortuEdit, setOrtuEdit)}
+                    <div className="text-base font-medium mb-3 text-slate-700">
+                        data orang tua
+                    </div>
+                    {/* kalau nanti ada field, editor generik akan menampilkannya */}
+                    {/* saat ini kemungkinan kosong */}
+                    {renderObjectEditor(ortuEdit, setOrtuEdit, [])}
                     {ortuDirty && (
                         <div className="flex justify-end mt-4">
-                            <button className="px-4 py-2 rounded-lg bg-black text-white shadow" onClick={() => saveSegment("orangTua")}>
+                            <button
+                                className="px-4 py-2 rounded-lg bg-black text-white shadow"
+                                onClick={() => saveSegment("orangTua")}
+                            >
                                 Save
                             </button>
                         </div>
                     )}
-                </div>
-
-                {/* data ayah */}
-                <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
-                    <div className="text-base font-medium mb-3 text-slate-700">data ayah</div>
-                    <div className="text-sm text-gray-500">(Jika field ayah terpisah, mapping-kan ke objek tersendiri.)</div>
                 </div>
             </div>
 
-            {/* KANAN: data application progres */}
+            {/* KANAN: dokumen */}
             <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40 p-6">
-                <div className="text-lg font-semibold text-slate-700 mb-4">data application progres</div>
+                <div className="text-lg font-semibold text-slate-700 mb-4">
+                    data application progres
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {REQUIRED_TYPES.map((type) => {
@@ -322,17 +462,30 @@ export default function ProgressDetailClient({
                         const uploaded = !!existing && !!getLink(existing);
 
                         return (
-                            <div key={type} className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
+                            <div
+                                key={type}
+                                className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7"
+                            >
                                 <div className="flex items-start justify-between mb-3">
                                     <div>
-                                        <div className="text-sm font-medium text-slate-700">{type}</div>
-                                        <div className={`text-xs mt-1 ${uploaded ? "text-emerald-600" : "text-rose-600"}`}>
+                                        <div className="text-sm font-medium text-slate-700">
+                                            {type}
+                                        </div>
+                                        <div
+                                            className={`text-xs mt-1 ${uploaded ? "text-emerald-600" : "text-rose-600"
+                                                }`}
+                                        >
                                             {uploaded ? "Uploaded" : "Not Uploaded"}
                                         </div>
                                     </div>
 
                                     {uploaded && (
-                                        <a href={getLink(existing!)} target="_blank" rel="noopener noreferrer" className="text-xs underline text-blue-600">
+                                        <a
+                                            href={getLink(existing)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-xs underline text-blue-600"
+                                        >
                                             Open
                                         </a>
                                     )}
@@ -360,13 +513,11 @@ export default function ProgressDetailClient({
                                         className="block w-full text-xs"
                                         onChange={(e) => {
                                             const f = e.target.files?.[0] || null;
-                                            onPickFile(type, f);
-                                            ensureDocEntryFor(type);
+                                            onPickFile(type as RequiredType, f);
+                                            ensureDocEntryFor(type as RequiredType);
                                         }}
                                     />
                                 </div>
-
-                                {pendingUploads[type] && <div className="mt-2 text-[11px] text-gray-500">Selected: {pendingUploads[type]?.name}</div>}
                             </div>
                         );
                     })}
@@ -374,7 +525,10 @@ export default function ProgressDetailClient({
 
                 {docsDirty && (
                     <div className="flex justify-end mt-4">
-                        <button className="px-4 py-2 rounded-lg bg-black text-white shadow" onClick={() => saveSegment("dokumen")}>
+                        <button
+                            className="px-4 py-2 rounded-lg bg-black text-white shadow"
+                            onClick={() => saveSegment("dokumen")}
+                        >
                             Save
                         </button>
                     </div>

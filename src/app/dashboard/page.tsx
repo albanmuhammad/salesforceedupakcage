@@ -1,29 +1,21 @@
-// src/app/dashboard/page.tsx
 import { cookies } from "next/headers";
 import Link from "next/link";
 import LogoutButton from "@/app/logout/logout";
 import OpportunityCard from "./OpportunityCard";
 
-// ==== TYPES ====
-// Lookup relation minimal field yang kita pakai (Name)
 type LookupName = { Name?: string } | null;
 
 export interface OpportunityItem {
   Id: string;
   Name: string;
   StageName?: string | null;
-
   Is_Active__c: boolean;
-
   Campus__c?: string | null;
   Campus__r?: LookupName;
-
   Study_Program__c?: string | null;
   Study_Program__r?: LookupName;
-
   Test_Schedule__c?: string | null;
 }
-
 export interface ProgressResponse {
   ok: boolean;
   applicantName: string;
@@ -32,33 +24,20 @@ export interface ProgressResponse {
   error?: string;
 }
 
-// ==== HELPERS ====
 function activeColor(status?: boolean | null) {
-  if (status) {
-    return "bg-green-500";
-  } else {
-    return "bg-red-500";
-  }
+  return status ? "bg-green-500" : "bg-red-500";
 }
-
 function formatSFDateTime(value?: string | null, tz = "Asia/Jakarta") {
   if (!value) return "—";
   let s = String(value);
   const m = s.match(/([+-]\d{2})(\d{2})$/);
   if (m) s = s.replace(m[0], `${m[1]}:${m[2]}`);
   else if (s.endsWith("+0000")) s = s.replace("+0000", "Z");
-
   const d = new Date(s);
   if (isNaN(d.getTime())) return "—";
-
   return new Intl.DateTimeFormat("id-ID", {
-    timeZone: tz,
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
+    timeZone: tz, day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(d);
 }
 
@@ -73,8 +52,8 @@ export default async function Dashboard() {
     headers: { cookie: cookieHeader },
   });
   const data: ProgressResponse = await res.json();
-  const items: OpportunityItem[] = data?.items ?? [];
-  const applicantName: string = data?.applicantName ?? "Applicant";
+  const items = data?.items ?? [];
+  const applicantName = data?.applicantName ?? "Applicant";
 
   return (
     <main className="min-h-screen relative flex items-center justify-center bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600">
@@ -86,9 +65,7 @@ export default async function Dashboard() {
           <div className="p-6 md:p-10">
             <div className="mb-10 text-center">
               <h2 className="text-base md:text-lg text-gray-500">Welcome</h2>
-              <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-gray-900">
-                {applicantName}
-              </h1>
+              <h1 className="text-2xl md:text-3xl font-semibold text-gray-900">{applicantName}</h1>
             </div>
 
             {!items.length && (
