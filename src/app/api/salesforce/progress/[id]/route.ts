@@ -361,7 +361,7 @@ export async function PATCH(
           );
         }
 
-        if (!cur.Is_Active__c) {
+        if (!cur.Is_Active__c && cur.StageName != "Closed Lost") {
           const upd = await conn.sobject("Opportunity").update({
             Id: id,
             Is_Active__c: true,

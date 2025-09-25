@@ -1,7 +1,9 @@
+// app/dashboard/OpportunityCard.tsx
 "use client";
 
 import { useState, MouseEvent } from "react";
 import { useRouter } from "next/navigation";
+import ModalPortal from "@/components/ModalPortal";
 
 export type LookupName = { Name?: string } | null;
 
@@ -21,11 +23,9 @@ export interface OpportunityItem {
 function normalizeStage(stage?: string | null) {
     return (stage || "").trim().toLowerCase();
 }
-
 function isReRegistration(stage?: string | null, webStage?: string | null) {
     const s = normalizeStage(stage);
     const w = normalizeStage(webStage);
-    // longgar: “re-registration”, “re registration”, “reregistration”
     const hasRe = (v: string) =>
         v.includes("re-registration") || v.includes("closed") || v.includes("reregistr");
     return hasRe(w) || hasRe(s);
@@ -35,19 +35,23 @@ export default function OpportunityCard({
     item,
     children,
     className,
+    setGlobalLoading,
 }: {
     item: OpportunityItem;
-    children: React.ReactNode;     // isi kartu yang sudah kamu render di server
+    children: React.ReactNode;
     className?: string;
+    // 👉 callback dari DashboardClient
+    setGlobalLoading?: (v: boolean) => void;
 }) {
     const router = useRouter();
     const [open, setOpen] = useState(false);
-    const [loading, setLoading] = useState<false | "activating" | "routing">(false);
+    const [busy, setBusy] = useState<false | "activating" | "routing">(false);
     const [error, setError] = useState<string | null>(null);
 
     async function activate(id: string) {
         setError(null);
-        setLoading("activating");
+        setBusy("activating");
+        setGlobalLoading?.(true);
         try {
             const res = await fetch(`/api/salesforce/progress/${item.Id}`, {
                 method: "PATCH",
@@ -65,21 +69,24 @@ export default function OpportunityCard({
             return updated.opp;
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : "Failed to activate");
+            // matikan loader global karena kita tetap di halaman ini
+            setGlobalLoading?.(false);
             throw e;
         } finally {
-            setLoading(false);
+            setBusy(false);
         }
     }
 
     async function routeAfter(oppId: string, stage?: string | null, webStage?: string | null) {
-        setLoading("routing");
+        setBusy("routing");
+        setGlobalLoading?.(true);
         const reReg = isReRegistration(stage, webStage);
         if (reReg) {
-            router.push(`/progress/${oppId}`);
+            router.push(`/progress/${oppId}`); // next/router akan ganti halaman
         } else {
-            // external
             window.location.href = `https://edudevsite.vercel.app/register.html?opp=${oppId}`;
         }
+        // JANGAN setGlobalLoading(false) — biarkan overlay sampai navigasi selesai.
     }
 
     async function onCardClick(e: MouseEvent<HTMLButtonElement>) {
@@ -90,7 +97,6 @@ export default function OpportunityCard({
             setOpen(true);
             return;
         }
-
         await routeAfter(item.Id, item.StageName, item.Web_Stage__c);
     }
 
@@ -100,62 +106,65 @@ export default function OpportunityCard({
             setOpen(false);
             await routeAfter(item.Id, opp.StageName, opp.Web_Stage__c);
         } catch {
-            // error message sudah di-set
+            // error sudah ditangani di activate()
         }
     }
 
     return (
         <>
-            {/* Jadikan kartu sebagai button supaya bisa intercept klik */}
+            {/* Card as button */}
             <button
                 onClick={onCardClick}
                 className={className}
-                disabled={loading !== false}
-                aria-disabled={loading !== false}
+                disabled={!!busy}
+                aria-disabled={!!busy}
+                aria-busy={!!busy}
             >
                 {children}
             </button>
 
-            {/* Modal konfirmasi aktivasi */}
+            {/* Modal */}
             {open && (
-                <div
-                    className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
-                    role="dialog"
-                    aria-modal="true"
-                >
-                    <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6">
-                        <h3 className="text-lg font-semibold text-gray-900">
-                            Aktifkan Opportunity?
-                        </h3>
-                        <p className="mt-2 text-sm text-gray-600">
-                            Opportunity <span className="font-medium">{item.Name}</span> saat ini non-aktif.
-                            Ingin mengaktifkan sekarang?
-                        </p>
+                <ModalPortal>
+                    <div
+                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
+                        role="dialog"
+                        aria-modal="true"
+                    >
+                        <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6">
+                            <h3 className="text-lg font-semibold text-gray-900">
+                                Aktifkan Opportunity?
+                            </h3>
+                            <p className="mt-2 text-sm text-gray-600">
+                                Opportunity <span className="font-medium">{item.Name}</span> saat ini non-aktif.
+                                Ingin mengaktifkan sekarang?
+                            </p>
 
-                        {error && (
-                            <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                                {error}
+                            {error && (
+                                <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                    {error}
+                                </div>
+                            )}
+
+                            <div className="mt-6 flex items-center justify-end gap-3">
+                                <button
+                                    className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-50"
+                                    onClick={() => setOpen(false)}
+                                    disabled={!!busy}
+                                >
+                                    Batal
+                                </button>
+                                <button
+                                    className="px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+                                    onClick={onConfirm}
+                                    disabled={!!busy}
+                                >
+                                    {busy === "activating" ? "Mengaktifkan..." : "Ya, Aktifkan"}
+                                </button>
                             </div>
-                        )}
-
-                        <div className="mt-6 flex items-center justify-end gap-3">
-                            <button
-                                className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-50"
-                                onClick={() => setOpen(false)}
-                                disabled={loading !== false}
-                            >
-                                Batal
-                            </button>
-                            <button
-                                className="px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
-                                onClick={onConfirm}
-                                disabled={loading !== false}
-                            >
-                                {loading === "activating" ? "Mengaktifkan..." : "Ya, Aktifkan"}
-                            </button>
                         </div>
                     </div>
-                </div>
+                </ModalPortal>
             )}
         </>
     );

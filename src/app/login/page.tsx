@@ -14,16 +14,22 @@ export default function LoginPage() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [err, setErr] = useState("");
+    const [loading, setLoading] = useState(false);
 
     async function onSubmit(e: React.FormEvent) {
         e.preventDefault();
         setErr("");
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) {
-            setErr(error.message);
-            return;
+        setLoading(true);
+        try {
+            const { error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) {
+                setErr(error.message);
+                return;
+            }
+            window.location.href = "/dashboard";
+        } finally {
+            setLoading(false);
         }
-        window.location.href = "/dashboard";
     }
 
     return (
@@ -74,9 +80,32 @@ export default function LoginPage() {
 
                     <button
                         type="submit"
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg p-3 font-semibold transition"
+                        disabled={loading}
+                        className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg p-3 font-semibold transition disabled:opacity-60"
                     >
-                        Sign In
+                        {loading && (
+                            <svg
+                                className="animate-spin h-5 w-5 text-white"
+                                xmlns="http://www.w3.org/2000/svg"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                            >
+                                <circle
+                                    className="opacity-25"
+                                    cx="12"
+                                    cy="12"
+                                    r="10"
+                                    stroke="currentColor"
+                                    strokeWidth="4"
+                                ></circle>
+                                <path
+                                    className="opacity-75"
+                                    fill="currentColor"
+                                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                                ></path>
+                            </svg>
+                        )}
+                        {loading ? "Signing In..." : "Sign In"}
                     </button>
 
                     <p className="text-sm text-center text-gray-600">
