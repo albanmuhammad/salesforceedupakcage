@@ -2,11 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getConn, sfQuery } from "@/lib/salesforce/client";
 import type { QueryResult } from "jsforce";
-import type {
-  AccountDocumentInsert,
-  AccountDocumentUpdate,
-} from "@/types/salesforce";
 
+// ==== TYPES ====
 type Progress = {
   Id: string;
   Name: string;
@@ -29,10 +26,10 @@ type AccountInfo = {
   IsPersonAccount?: boolean;
   PersonContactId?: string | null;
 
-  // Tambahan agar bisa ditampilkan di UI
+  // Tambahan untuk UI
   Phone?: string | null;
-  Master_School__c?: string | null; // ← tambah (lookup Id)
-  Master_School__r?: { Name?: string | null } | null; // ← tambah (lookup name)
+  Master_School__c?: string | null;
+  Master_School__r?: { Name?: string | null } | null;
 };
 
 type DocRow = {
@@ -44,7 +41,7 @@ type DocRow = {
 
 type CDLRow = {
   ContentDocumentId: string; // 069...
-  LinkedEntityId: string;
+  LinkedEntityId: string; // Who/What it's linked to (Opp/Acc/Contact)
   ContentDocument: {
     Title: string;
     LatestPublishedVersionId: string; // 068...
@@ -70,6 +67,12 @@ type PatchBody =
   | { segment: "orangTua"; id: string; orangTua: Record<string, unknown> }
   | { segment: "activate" };
 
+// ==== UTILS ====
+function esc(s: string) {
+  // Minimal escape untuk query literal single-quoted
+  return s.replace(/'/g, "\\'");
+}
+
 export async function GET(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
@@ -92,7 +95,7 @@ export async function GET(
 
   // --- Params ---
   const { id: rawId } = await ctx.params;
-  const id = String(rawId).replace(/'/g, "\\'");
+  const id = esc(String(rawId));
   console.log(
     `[${traceId}] HIT /api/salesforce/progress/${id} as ${userEmail}`
   );
@@ -118,7 +121,7 @@ export async function GET(
     accountId: progress.AccountId,
   });
 
-  // 2) Validasi akses + ambil Account minimal (sekaligus Phone & School__c)
+  // 2) Validasi akses + ambil Account minimal (plus Phone & School__c)
   let allowed = false;
   let siswaAccount: AccountInfo | null = null;
 
@@ -127,7 +130,7 @@ export async function GET(
       SELECT Id, Name, PersonEmail, PersonBirthdate, IsPersonAccount, PersonContactId,
              Phone, Master_School__c, Master_School__r.Name
       FROM Account
-      WHERE Id='${progress.AccountId}'
+      WHERE Id='${esc(progress.AccountId)}'
       LIMIT 1
     `);
     const account: AccountInfo | null = accRows[0] ?? null;
@@ -154,7 +157,7 @@ export async function GET(
           const cRows = await sfQuery<{ Id: string; Email?: string | null }>(`
             SELECT Id, Email
             FROM Contact
-            WHERE Id='${account.PersonContactId}'
+            WHERE Id='${esc(account.PersonContactId)}'
             LIMIT 1
           `);
           const personContact = cRows[0] ?? null;
@@ -182,7 +185,7 @@ export async function GET(
     }>(`
       SELECT Id, IsPrimary, ContactId
       FROM OpportunityContactRole
-      WHERE OpportunityId='${progress.Id}'
+      WHERE OpportunityId='${esc(progress.Id)}'
       ORDER BY IsPrimary DESC, CreatedDate ASC
     `);
     console.log(`[${traceId}] OCR count: ${roles.length}`);
@@ -200,7 +203,7 @@ export async function GET(
       const cRows = await sfQuery<{ Id: string; Email?: string | null }>(`
         SELECT Id, Email
         FROM Contact
-        WHERE Id='${primaryOrFirst.ContactId}'
+        WHERE Id='${esc(primaryOrFirst.ContactId)}'
         LIMIT 1
       `);
       const c = cRows[0] ?? null;
@@ -221,24 +224,16 @@ export async function GET(
     );
   }
 
-  // 3) Dokumen (custom object)
+  // 3) Dokumen (custom object) — ambil baris Account_Document__c
   const rawDocs = await sfQuery<DocRow>(`
     SELECT Id, Name, Document_Type__c, Document_Link__c
     FROM Account_Document__c
-    WHERE Application_Progress__c='${progress.Id}'
+    WHERE Application_Progress__c='${id}'
     ORDER BY CreatedDate DESC
   `);
-
   console.log(`[${traceId}] account documents count: ${rawDocs.length}`);
 
-  const docs = rawDocs.map((d) => ({
-    Id: d.Id,
-    Name: d.Name,
-    Type__c: d.Document_Type__c ?? null,
-    Url__c: d.Document_Link__c ?? null,
-  }));
-
-  // 4) LUASKAN: cari file di Opportunity, Account, dan semua Contact
+  // 4) Perluas pencarian file via ContentDocumentLink pada Opportunity, Account, dan semua Contact di OCR
   const candidateIds = new Set<string>();
   candidateIds.add(progress.Id);
   if (progress.AccountId) candidateIds.add(progress.AccountId);
@@ -249,7 +244,7 @@ export async function GET(
 
   let cdl: CDLRow[] = [];
   if (idList.length) {
-    const inList = idList.map((s) => `'${s}'`).join(",");
+    const inList = idList.map((s) => `'${esc(s)}'`).join(",");
     cdl = await sfQuery<CDLRow>(`
       SELECT
         ContentDocumentId,
@@ -275,7 +270,127 @@ export async function GET(
     );
   }
 
-  // Pilih judul yang mengandung "pas foto", kalau tidak ada ambil entry terbaru
+  // ==== Helper: ekstrak ID dari URL (068/069) ====
+  function extractIdsFromUrl(url?: string | null): {
+    verId?: string;
+    docId?: string;
+  } {
+    if (!url) return {};
+    // Cari 068… (ContentVersionId) atau 069… (ContentDocumentId)
+    const m068 = url.match(/(?:^|[^\w])(068[0-9A-Za-z]{15,18})/);
+    if (m068?.[1]) return { verId: m068[1] };
+    const m069 = url.match(/(?:^|[^\w])(069[0-9A-Za-z]{15,18})/);
+    if (m069?.[1]) return { docId: m069[1] };
+    return {};
+  }
+
+  // ==== 1) Buat index dari CDL: 069 -> 068 (Latest) + judul ternormalisasi ====
+  const docIdToLatestVer = new Map<string, string>(); // 069 -> 068
+  const normalizedTitleToVer = new Map<string, string>();
+
+  function normTitle(s?: string | null) {
+    return (s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
+  for (const r of cdl) {
+    const latest = r.ContentDocument.LatestPublishedVersionId;
+    const docId = r.ContentDocumentId;
+    if (docId && latest && !docIdToLatestVer.has(docId)) {
+      docIdToLatestVer.set(docId, latest);
+    }
+    const t = normTitle(r.ContentDocument.Title);
+    if (t && latest && !normalizedTitleToVer.has(t)) {
+      normalizedTitleToVer.set(t, latest);
+    }
+  }
+
+  // ==== 2) Siapkan batch lookup untuk 069 yang belum ada di map (opsional & hemat kueri) ====
+  const missing069 = new Set<string>();
+
+  // Koleksi kandidat ContentVersionId untuk tiap dok supaya tidak query berulang
+  const docIdFromLink: Array<{ idx: number; docId: string }> = [];
+  const verIdFromLink: Array<{ idx: number; verId: string }> = [];
+
+  // Pre-scan rawDocs untuk ambil ID dari link
+  rawDocs.forEach((d, idx) => {
+    const { verId, docId } = extractIdsFromUrl(d.Document_Link__c);
+    if (verId) verIdFromLink.push({ idx, verId });
+    else if (docId) {
+      docIdFromLink.push({ idx, docId });
+      if (!docIdToLatestVer.has(docId)) missing069.add(docId);
+    }
+  });
+
+  // Jika ada 069 yang belum punya latest version di map, batch query ContentDocument
+  if (missing069.size) {
+    const inList = Array.from(missing069)
+      .map((s) => `'${esc(s)}'`)
+      .join(",");
+    const rows = await sfQuery<{
+      Id: string;
+      LatestPublishedVersionId: string;
+    }>(`
+    SELECT Id, LatestPublishedVersionId
+    FROM ContentDocument
+    WHERE Id IN (${inList})
+  `);
+    for (const r of rows) {
+      if (r.Id && r.LatestPublishedVersionId) {
+        docIdToLatestVer.set(r.Id, r.LatestPublishedVersionId);
+      }
+    }
+  }
+
+  // ==== 3) Bangun hasil 'docs' dengan prioritas:
+  // (a) URL punya 068 -> pakai itu
+  // (b) URL punya 069 -> map ke 068 via docIdToLatestVer
+  // (c) Cocokkan judul ternormalisasi (Name vs Title)
+  // (d) Gagal -> null
+  const docs = rawDocs.map((d, i) => {
+    // (a) langsung 068 dari URL
+    const verDirect = verIdFromLink.find((x) => x.idx === i)?.verId;
+    if (verDirect) {
+      return {
+        Id: d.Id,
+        Name: d.Name,
+        Type__c: d.Document_Type__c ?? null,
+        Url__c: d.Document_Link__c ?? null,
+        ContentVersionId: verDirect,
+      };
+    }
+
+    // (b) 069 dari URL → 068 via map
+    const docFromUrl = docIdFromLink.find((x) => x.idx === i)?.docId;
+    const verFrom069 = docFromUrl
+      ? docIdToLatestVer.get(docFromUrl) ?? null
+      : null;
+    if (verFrom069) {
+      return {
+        Id: d.Id,
+        Name: d.Name,
+        Type__c: d.Document_Type__c ?? null,
+        Url__c: d.Document_Link__c ?? null,
+        ContentVersionId: verFrom069,
+      };
+    }
+
+    // (c) fallback judul
+    const key = normTitle(d.Name);
+    const verFromTitle = key ? normalizedTitleToVer.get(key) ?? null : null;
+
+    return {
+      Id: d.Id,
+      Name: d.Name,
+      Type__c: d.Document_Type__c ?? null,
+      Url__c: d.Document_Link__c ?? null,
+      ContentVersionId: verFromTitle, // bisa null kalau tidak ketemu
+    };
+  });
+
+  // Pilih foto: judul mengandung "pas foto", jika tidak ada ambil entri pertama
   const photo =
     cdl.find((x) =>
       (x.ContentDocument.Title || "").toLowerCase().includes("pas foto")
@@ -284,9 +399,9 @@ export async function GET(
   let photoVersionId: string | null =
     photo?.ContentDocument.LatestPublishedVersionId || null;
 
-  // (opsional) fallback: pastikan latest via ContentVersion
+  // (opsional) fallback verifikasi via ContentVersion jika title kosong atau tidak ada LatestPublishedVersionId
   if (!photoVersionId && cdl.length) {
-    const docIds = cdl.map((r) => `'${r.ContentDocumentId}'`).join(",");
+    const docIds = cdl.map((r) => `'${esc(r.ContentDocumentId)}'`).join(",");
     const versions = await sfQuery<VersionRow>(`
       SELECT Id, ContentDocumentId, IsLatest
       FROM ContentVersion
@@ -311,6 +426,12 @@ export async function GET(
             title: r.ContentDocument.Title,
             versionId: r.ContentDocument.LatestPublishedVersionId,
           })),
+          documents: docs.map((d) => ({
+            id: d.Id,
+            name: d.Name,
+            originalUrl: d.Url__c,
+            contentVersionId: d.ContentVersionId,
+          })),
         },
       }
     : undefined;
@@ -321,8 +442,8 @@ export async function GET(
       progress,
       siswa: siswaAccount,
       orangTua: null,
-      dokumen: docs,
-      photoVersionId, // dipakai UI <img src="/api/salesforce/files/version/{id}/data">
+      dokumen: docs, // sudah include ContentVersionId hasil match Title
+      photoVersionId, // untuk <img src="/api/salesforce/files/version/{id}/data">
       ...debugPayload,
     },
   });
@@ -332,10 +453,10 @@ export async function PATCH(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await ctx.params;
-  const body = (await req.json()) as PatchBody;
+  const { id: rawId } = await ctx.params;
+  const id = String(rawId);
 
-  // ✅ auth sama seperti GET
+  // ✅ Auth sama seperti GET
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData?.user?.id) {
@@ -345,6 +466,7 @@ export async function PATCH(
     );
   }
 
+  const body = (await req.json()) as PatchBody;
   const conn = await getConn();
 
   switch (body.segment) {
@@ -361,7 +483,7 @@ export async function PATCH(
           );
         }
 
-        if (!cur.Is_Active__c && cur.StageName != "Closed Lost") {
+        if (!cur.Is_Active__c && cur.StageName !== "Closed Lost") {
           const upd = await conn.sobject("Opportunity").update({
             Id: id,
             Is_Active__c: true,
@@ -379,9 +501,9 @@ export async function PATCH(
           .retrieve(id)) as OpportunityRecord;
 
         const opp = {
-          Id: q.Id as string,
-          StageName: (q.StageName ?? null) as string | null,
-          Web_Stage__c: (q.Web_Stage__c ?? null) as string | null,
+          Id: String(q.Id),
+          StageName: q.StageName ?? null,
+          Web_Stage__c: q.Web_Stage__c ?? null,
           Is_Active__c: !!q.Is_Active__c,
         };
 
@@ -397,11 +519,11 @@ export async function PATCH(
     }
 
     case "dokumen": {
-      // ---- pindahan logic dokumen masuk sini ----
-      const docs =
-        body.segment === "dokumen" && Array.isArray(body.dokumen)
-          ? body.dokumen
-          : null;
+      const docs = Array.isArray(
+        (body as Extract<PatchBody, { segment: "dokumen" }>).dokumen
+      )
+        ? (body as Extract<PatchBody, { segment: "dokumen" }>).dokumen
+        : null;
       if (!docs) {
         return NextResponse.json(
           { ok: false, error: "invalid_payload_dokumen" },
@@ -421,18 +543,19 @@ export async function PATCH(
       // 2) query existing untuk progress + tipe-2 tsb
       const existingByType = new Map<string, { Id: string }>();
       if (types.length) {
-        const inList = types
-          .map((t) => `'${t.replace(/'/g, "\\'")}'`)
-          .join(",");
+        const inList = types.map((t) => `'${esc(t)}'`).join(",");
         const qRes: QueryResult<{ Id: string; Document_Type__c: string }> =
           await conn.query(
             `SELECT Id, Document_Type__c
              FROM Account_Document__c
-             WHERE Application_Progress__c='${id}' AND Document_Type__c IN (${inList})`
+             WHERE Application_Progress__c='${esc(
+               id
+             )}' AND Document_Type__c IN (${inList})`
           );
         for (const r of qRes.records) {
-          if (r.Document_Type__c)
+          if (r.Document_Type__c) {
             existingByType.set(r.Document_Type__c, { Id: r.Id });
+          }
         }
       }
 

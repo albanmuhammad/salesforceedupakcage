@@ -26,7 +26,7 @@ export default function LoginPage() {
                 setErr(error.message);
                 return;
             }
-            window.location.href = "/dashboard";
+            r.push("/dashboard");
         } finally {
             setLoading(false);
         }

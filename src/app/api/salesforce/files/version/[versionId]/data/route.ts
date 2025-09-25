@@ -4,50 +4,129 @@ import { getConn } from "@/lib/salesforce/client";
 
 export const dynamic = "force-dynamic";
 
+function sanitizeFilename(name: string) {
+  // Hilangkan karakter yang tidak aman untuk nama file
+  return name.replace(/[\\/:*?"<>|]+/g, "_").trim() || "file";
+}
+
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ versionId: string }> }
 ) {
   try {
-    // ✅ WAJIB: await params di Next 15
     const { versionId } = await params;
     if (!versionId) {
       return new NextResponse("Missing versionId", { status: 400 });
     }
 
-    // Ambil koneksi jsforce yang sudah login
     const conn = await getConn();
 
-    // Hit endpoint VersionData (binary) untuk ContentVersion tertentu
-    const url = `${conn.instanceUrl}/services/data/v58.0/sobjects/ContentVersion/${encodeURIComponent(
+    // 1) Ambil metadata ContentVersion agar bisa set filename & content-type
+    const metaUrl = `${
+      conn.instanceUrl
+    }/services/data/v58.0/sobjects/ContentVersion/${encodeURIComponent(
       versionId
-    )}/VersionData`;
-
-    const resp = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${conn.accessToken}`,
-      },
+    )}?fields=Title,FileExtension,FileType,PathOnClient`;
+    const metaResp = await fetch(metaUrl, {
+      headers: { Authorization: `Bearer ${conn.accessToken}` },
     });
 
-    if (!resp.ok) {
-      const errText = await resp.text();
+    if (!metaResp.ok) {
+      const t = await metaResp.text();
       return new NextResponse(
-        `Salesforce error ${resp.status}: ${errText}`,
+        `Salesforce metadata error ${metaResp.status}: ${t}`,
         { status: 502 }
       );
     }
 
+    const meta = (await metaResp.json()) as {
+      Title?: string;
+      FileExtension?: string;
+      FileType?: string; // e.g. 'PDF'
+      PathOnClient?: string; // original filename when uploaded (optional)
+    };
+
+    // Tentukan nama & ekstensi
+    const baseName =
+      meta.PathOnClient?.split(/[\\/]/)
+        .pop()
+        ?.split(".")
+        .slice(0, -1)
+        .join(".") ||
+      meta.Title ||
+      "file";
+
+    const extFromPath = meta.PathOnClient?.includes(".")
+      ? meta.PathOnClient.split(".").pop()
+      : undefined;
+
+    const ext = (meta.FileExtension || extFromPath || "").replace(
+      /[^a-zA-Z0-9]/g,
+      ""
+    );
+    const filename = sanitizeFilename(ext ? `${baseName}.${ext}` : baseName);
+
+    // (opsional) map FileType → content-type
+    const typeMap: Record<string, string> = {
+      PDF: "application/pdf",
+      PNG: "image/png",
+      JPG: "image/jpeg",
+      JPEG: "image/jpeg",
+      GIF: "image/gif",
+      CSV: "text/csv",
+      TXT: "text/plain",
+      DOC: "application/msword",
+      DOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      XLS: "application/vnd.ms-excel",
+      XLSX: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      PPT: "application/vnd.ms-powerpoint",
+      PPTX: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      MP4: "video/mp4",
+      MP3: "audio/mpeg",
+      ZIP: "application/zip",
+    };
+    const fallbackType = "application/octet-stream";
     const contentType =
-      resp.headers.get("content-type") || "application/octet-stream";
+      (meta.FileType && typeMap[meta.FileType.toUpperCase()]) || fallbackType;
+
+    // 2) Ambil binary VersionData
+    const binUrl = `${
+      conn.instanceUrl
+    }/services/data/v58.0/sobjects/ContentVersion/${encodeURIComponent(
+      versionId
+    )}/VersionData`;
+
+    const resp = await fetch(binUrl, {
+      headers: { Authorization: `Bearer ${conn.accessToken}` },
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      return new NextResponse(`Salesforce error ${resp.status}: ${errText}`, {
+        status: 502,
+      });
+    }
+
+    // Forward stream/binary
     const ab = await resp.arrayBuffer();
 
-    // Return sebagai binary, inline supaya <img src=...> bisa render
+    // Tentukan inline vs attachment:
+    // - pakai "inline" kalau mau bisa dirender di <img> atau <iframe>
+    // - pakai "attachment" kalau ingin force download dengan nama yang benar
+    const disposition = /^(image|video)\//.test(contentType)
+      ? "inline"
+      : "attachment";
+
     return new NextResponse(Buffer.from(ab), {
       status: 200,
       headers: {
         "Content-Type": contentType,
+        "Content-Length": String(ab.byteLength),
         "Cache-Control": "private, max-age=60",
-        "Content-Disposition": "inline",
+        // filename penting agar tidak jadi "data"
+        "Content-Disposition": `${disposition}; filename="${encodeURIComponent(
+          filename
+        )}"`,
       },
     });
   } catch (e: unknown) {

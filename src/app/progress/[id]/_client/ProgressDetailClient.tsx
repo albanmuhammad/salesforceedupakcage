@@ -11,6 +11,7 @@ type Doc = {
     Url__c?: string | null;
     Document_Type__c?: string | null;
     Document_Link__c?: string | null;
+    ContentVersionId?: string | null
 };
 
 function deepClone<T>(v: T): T {
@@ -122,8 +123,18 @@ export default function ProgressDetailClient({
     // ===== Keys/helper dokumen =====
     const getType = (d: Doc): string => d.Document_Type__c ?? d.Type__c ?? "";
     const setType = (d: Doc, v: string): void => { d.Document_Type__c = v; d.Type__c = v; };
-    const getLink = (d: Doc): string => d.Document_Link__c ?? d.Url__c ?? "";
     const setLink = (d: Doc, v: string): void => { d.Document_Link__c = v; d.Url__c = v; };
+
+    const shepherdToProxy = (raw?: string | null) => {
+        if (!raw) return "";
+        const m = raw.match(/\/document\/download\/(069[0-9A-Za-z]+)/i);
+        return m?.[1] ? `/api/salesforce/files/document/${m[1]}/data` : raw;
+    };
+
+    const getLink = (d: Doc): string => {
+        // 1) Paling aman: kalau BE sudah kasih 068
+        return `/api/salesforce/files/version/${d.ContentVersionId}/data`;
+    };
 
     const docsByType = useMemo(() => {
         const m = new Map<string, Doc>();
