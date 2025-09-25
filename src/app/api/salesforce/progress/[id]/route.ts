@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getConn, sfQuery } from "@/lib/salesforce/client";
-import type { QueryResult } from "jsforce";
+import type { QueryResult, SaveResult } from "jsforce";
 
 /* ===================== Types ===================== */
 
@@ -63,14 +63,14 @@ type DocBody = {
 /* ===== Orang Tua (Relationship + Contact joins) ===== */
 type ParentRelRow = {
   Id: string;                  // Relationship__c.Id
-  Type__c?: string | null;     // Relationship__c.Type__c
-  Contact__c?: string | null;  // Relationship__c.Contact__c
+  Type__c?: string | null;
+  Contact__c?: string | null;
   Contact__r?: {
     Name?: string | null;
-    Job__c?: string | null;        // Contact custom field
+    Job__c?: string | null;
     Phone?: string | null;
     Email?: string | null;
-    Address__c?: string | null;    // Contact custom field
+    Address__c?: string | null;
   } | null;
 };
 
@@ -101,7 +101,7 @@ export async function GET(
   const url = new URL(req.url);
   const debug = url.searchParams.get("debug") === "1";
 
-  // --- Auth (Supabase) ---
+  // Auth
   const supabase = await createClient();
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   if (userErr || !userData?.user?.email) {
@@ -109,7 +109,7 @@ export async function GET(
   }
   const userEmail = userData.user.email.toLowerCase();
 
-  // --- Params ---
+  // Params
   const { id: rawId } = await ctx.params;
   const id = String(rawId).replace(/'/g, "\\'");
   console.log(`[${traceId}] HIT /api/salesforce/progress/${id} as ${userEmail}`);
@@ -193,7 +193,7 @@ export async function GET(
     return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
 
-  // 3) Dokumen (custom object)
+  // 3) Dokumen
   const rawDocs = await sfQuery<DocRow>(`
     SELECT Id, Name, Document_Type__c, Document_Link__c
     FROM Account_Document__c
@@ -208,7 +208,7 @@ export async function GET(
     Url__c: d.Document_Link__c ?? null,
   }));
 
-  // 4) Files (expanded) → pilih foto
+  // 4) Files → pilih foto
   const candidateIds = new Set<string>();
   candidateIds.add(progress.Id);
   if (progress.AccountId) candidateIds.add(progress.AccountId);
@@ -244,7 +244,7 @@ export async function GET(
     photoVersionId = versions[0]?.Id ?? null;
   }
 
-  /* 5) Orang Tua (Relationships untuk applicant ini) */
+  // 5) Orang Tua (Relationships untuk applicant ini)
   let orangTua: ParentRel[] = [];
   if (progress.AccountId) {
     const accIdSafe = progress.AccountId.replace(/'/g, "\\'");
@@ -252,7 +252,7 @@ export async function GET(
       SELECT Type__c, Id, Contact__c,
              Contact__r.Name, Contact__r.Job__c, Contact__r.Phone,
              Contact__r.Email, Contact__r.Address__c
-      FROM Relationship__c                       
+      FROM Relationship__c
       WHERE Related_Contact__r.AccountId = '${accIdSafe}'
       ORDER BY CreatedDate ASC
     `);
@@ -288,7 +288,7 @@ export async function GET(
     data: {
       progress,
       siswa: siswaAccount,
-      orangTua,              // <== dikirim ke UI
+      orangTua,
       dokumen: docs,
       photoVersionId,
       ...debugPayload,
@@ -301,13 +301,20 @@ export async function GET(
 function normalizeBirthdate(input: unknown): string | undefined {
   const s = String(input ?? "").trim();
   if (!s) return;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;                   // yyyy-mm-dd
-  const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);       // dd/mm/yyyy
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
   if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
   return s;
 }
 
 /* ===================== PATCH ===================== */
+
+/** Payload aman untuk update Account (Id wajib, field lain opsional) */
+type AccountUpdatePayload = {
+  Id: string;
+  PersonBirthdate?: string;
+  Phone?: string;
+};
 
 export async function PATCH(
   req: Request,
@@ -430,24 +437,28 @@ export async function PATCH(
         };
         const accountId = opp?.AccountId || null;
         if (!accountId) {
-          return NextResponse.json({ ok: false, error: "no_account_on_opportunity" }, { status: 400 });
+          return NextResponse.json(
+            { ok: false, error: "no_account_on_opportunity" },
+            { status: 400 }
+          );
         }
 
         const src = (body as Extract<PatchBody, { segment: "siswa" }>).siswa || {};
-        const updateBody: any = { Id: accountId };
+        const updateBody: AccountUpdatePayload = { Id: accountId };
 
-        const birth = normalizeBirthdate(src["PersonBirthdate"]);
+        const birth = normalizeBirthdate((src as Record<string, unknown>)["PersonBirthdate"]);
         if (birth) updateBody.PersonBirthdate = birth;
 
-        if (typeof src["Phone"] === "string") {
-          updateBody.Phone = (src["Phone"] as string).trim();
+        if (typeof (src as Record<string, unknown>)["Phone"] === "string") {
+          updateBody.Phone = String((src as Record<string, unknown>)["Phone"]).trim();
         }
 
-        const updRes = await conn.sobject("Account").update(updateBody as any);
-        const ok = Array.isArray(updRes) ? updRes.every((r) => r.success) : (updRes as any);
-        if (!ok) {
-          const errs = Array.isArray(updRes) ? updRes.flatMap((r: any) => r.errors ?? []) : (updRes as any ?? []);
-          return NextResponse.json({ ok: false, error: "sf_update_failed", details: errs }, { status: 500 });
+        const updRes: SaveResult = await conn.sobject("Account").update(updateBody);
+        if (!updRes.success) {
+          return NextResponse.json(
+            { ok: false, error: "sf_update_failed" },
+            { status: 500 }
+          );
         }
 
         return NextResponse.json({ ok: true });
@@ -465,57 +476,81 @@ export async function PATCH(
         };
         const accountId = opp?.AccountId || null;
         if (!accountId) {
-          return NextResponse.json({ ok: false, error: "no_account_on_opportunity" }, { status: 400 });
+          return NextResponse.json(
+            { ok: false, error: "no_account_on_opportunity" },
+            { status: 400 }
+          );
         }
 
         const acc = (await conn.sobject("Account").retrieve(accountId)) as {
           Id?: string; PersonContactId?: string | null;
         };
-        const studentContactId = acc?.PersonContactId || null; // untuk Related_Contact__c
+        const studentContactId = acc?.PersonContactId || null; // Related_Contact__c
 
         const items = (body as Extract<PatchBody, { segment: "orangTua" }>).orangTua;
         if (!Array.isArray(items)) {
-          return NextResponse.json({ ok: false, error: "invalid_payload_orangTua" }, { status: 400 });
+          return NextResponse.json(
+            { ok: false, error: "invalid_payload_orangTua" },
+            { status: 400 }
+          );
         }
 
         for (const p of items) {
           const type = (p.type || "").trim();
           const name = (p.name || "").trim();
-          if (!type || !name) continue; // skip baris kosong
+          if (!type || !name) continue;
 
-          // === Upsert Contact (orang tua) ===
+          // Upsert Contact (orang tua)
           let contactId = p.contactId || null;
-          const contactPayload: any = {
-            LastName: name,                                   // sederhana: taruh ke LastName
-            Job__c: (p.job || "").trim() || null,            // custom
+          const contactPayload: {
+            Id?: string;
+            LastName: string;
+            Job__c?: string | null;
+            Phone?: string | null;
+            Email?: string | null;
+            Address__c?: string | null;
+          } = {
+            LastName: name,
+            Job__c: (p.job || "").trim() || null,
             Phone: (p.phone || "").trim() || null,
             Email: (p.email || "").trim() || null,
-            Address__c: (p.address || "").trim() || null,    // custom
+            Address__c: (p.address || "").trim() || null,
           };
+
           if (contactId) {
             await conn.sobject("Contact").update({ Id: contactId, ...contactPayload });
           } else {
             const ins = await conn.sobject("Contact").insert(contactPayload);
-            if (!(ins as any)?.success) {
-              return NextResponse.json({ ok: false, error: "contact_insert_failed" }, { status: 500 });
+            if (!ins.success) {
+              return NextResponse.json(
+                { ok: false, error: "contact_insert_failed" },
+                { status: 500 }
+              );
             }
-            contactId = (ins as any).id as string;
+            contactId = ins.id as string;
           }
 
-          // === Upsert Relationship__c ===
-          const relBase: any = {
+          // Upsert Relationship__c
+          const relBase: {
+            Id?: string;
+            Type__c: string;
+            Contact__c: string;
+            Related_Contact__c?: string;
+          } = {
             Type__c: type,
-            Contact__c: contactId,                 // orang tua
+            Contact__c: contactId,
             ...(studentContactId ? { Related_Contact__c: studentContactId } : {}),
-            // ...(accountId ? { Account__c: accountId } : {}), // <-- aktifkan jika object punya Account__c
           };
 
           if (p.relationshipId) {
             await conn.sobject("Relationship__c").update({ Id: p.relationshipId, ...relBase });
           } else {
             const r = await conn.sobject("Relationship__c").insert(relBase);
-            if (!(r as any)?.success) {
-              return NextResponse.json({ ok: false, error: "relationship_insert_failed" }, { status: 500 });
+            if (!r.success) {
+              return NextResponse.json(
+                { ok: false, error: "relationship_insert_failed" },
+                { status: 500 }
+              );
             }
           }
         }

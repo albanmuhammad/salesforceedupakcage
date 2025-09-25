@@ -26,7 +26,7 @@ type RelType = (typeof REL_TYPE_OPTIONS)[number];
 /** hanya tipe yang harus unik */
 const SINGLETON_TYPES = new Set<RelType>(["Father", "Mother"]);
 
-type ParentRel = {
+export type ParentRel = {
   relationshipId?: string;
   type: RelType | "";
   contactId?: string;
@@ -42,7 +42,7 @@ type ParentRel = {
 type ProgressDetailClientProps = {
   id: string;
   siswa: Record<string, unknown>;
-  orangTua: ParentRel[] | Record<string, any>;
+  orangTua: ParentRel[] | Record<string, unknown>;
   dokumen: Doc[];
   apiBase: string;
   cookieHeader: string;
@@ -180,7 +180,7 @@ export default function ProgressDetailClient({
               filename: file.name,
               base64,
               relateToId: id,
-              accountId: siswa.Id,
+              accountId: (siswa as { Id?: string }).Id,
               documentType: type,
             }),
           });
@@ -358,8 +358,8 @@ export default function ProgressDetailClient({
   const getType = (d: Doc): string => d.Document_Type__c ?? d.Type__c ?? "";
   const getLink = (d: Doc): string => d.Document_Link__c ?? d.Url__c ?? "";
   const setLinkMutable = (d: Doc, v: string) => {
-    if ("Document_Link__c" in d) d.Document_Link__c = v;
-    else d.Url__c = v;
+    if ("Document_Link__c" in d) (d as Doc).Document_Link__c = v;
+    else (d as Doc).Url__c = v;
   };
 
   const docsByType = useMemo(() => {
