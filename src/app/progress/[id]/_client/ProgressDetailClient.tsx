@@ -36,7 +36,11 @@ type PaymentInfo = {
   Payment_For__c?: string | null;
 };
 
-
+/**
+ * NOTE:
+ * Untuk saat ini picklist Type menggunakan fallback lokal,
+ * hanya menampilkan "Father" dan "Mother".
+ */
 const REL_TYPE_OPTIONS = ["Father", "Mother"] as const;
 type RelType = (typeof REL_TYPE_OPTIONS)[number];
 const SINGLETON_TYPES = new Set<RelType>(["Father", "Mother"]);
@@ -71,7 +75,7 @@ type ProgressDetailClientProps = {
   dokumen: Doc[];
   apiBase: string;
   photoVersionId: string | null;
-  payments: PaymentInfo[]; // NEW
+  payments: PaymentInfo[];
 };
 
 function deepClone<T>(v: T): T {
@@ -111,7 +115,13 @@ function blankParent(): ParentRel {
 }
 
 const fmtIDR = (v?: number | null) =>
-  typeof v === "number" ? new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(v) : "—";
+  typeof v === "number"
+    ? new Intl.NumberFormat("id-ID", {
+        style: "currency",
+        currency: "IDR",
+        maximumFractionDigits: 0,
+      }).format(v)
+    : "—";
 
 export default function ProgressDetailClient({
   id,
@@ -120,7 +130,7 @@ export default function ProgressDetailClient({
   dokumen,
   apiBase,
   photoVersionId,
-  payments
+  payments,
 }: ProgressDetailClientProps) {
   const photoUrl = photoVersionId
     ? `${apiBase}/api/salesforce/files/version/${photoVersionId}/data`
@@ -131,11 +141,14 @@ export default function ProgressDetailClient({
   // Originals
   const originalSiswa = useMemo(() => deepClone(siswa), [siswa]);
   const originalOrtuObj = useMemo<Record<string, unknown>>(
-    () => (isOrtuArray ? {} : deepClone((orangTua && typeof orangTua === "object") ? orangTua as Record<string, unknown> : {})),
+    () =>
+      isOrtuArray
+        ? {}
+        : deepClone((orangTua && typeof orangTua === "object" ? (orangTua as Record<string, unknown>) : {})),
     [orangTua, isOrtuArray]
   );
   const originalOrtuArr = useMemo<ParentRel[]>(
-    () => (!isOrtuArray ? [] : (deepClone(orangTua as ParentRel[]).map(p => ({ ...p, locked: true })))),
+    () => (!isOrtuArray ? [] : deepClone(orangTua as ParentRel[]).map((p) => ({ ...p, locked: true }))),
     [orangTua, isOrtuArray]
   );
   const originalDocs = useMemo(() => deepClone(dokumen), [dokumen]);
@@ -155,7 +168,7 @@ export default function ProgressDetailClient({
   // Docs helpers
   const getType = (d: Doc): string => d.Document_Type__c ?? d.Type__c ?? "";
   const getDocOpenUrl = (d: Doc): string =>
-    d.ContentVersionId ? `/api/salesforce/files/version/${d.ContentVersionId}/data` : (d.Document_Link__c ?? d.Url__c ?? "");
+    d.ContentVersionId ? `/api/salesforce/files/version/${d.ContentVersionId}/data` : d.Document_Link__c ?? d.Url__c ?? "";
 
   const docsByType = useMemo(() => {
     const m = new Map<string, Doc>();
@@ -174,10 +187,7 @@ export default function ProgressDetailClient({
   }
   function ensureDocEntryFor(type: RequiredType) {
     if (docsByType.get(type)) return;
-    setDocsEdit((prev) => [
-      ...prev,
-      { Id: undefined, Name: type, Document_Type__c: type, Document_Link__c: "" },
-    ]);
+    setDocsEdit((prev) => [...prev, { Id: undefined, Name: type, Document_Type__c: type, Document_Link__c: "" }]);
   }
 
   async function saveSegment(segment: "siswa" | "orangTua" | "dokumen") {
@@ -235,7 +245,7 @@ export default function ProgressDetailClient({
         body.siswa = siswaEdit;
       } else if (segment === "orangTua") {
         if (isOrtuArray) {
-          // Validate singleton types
+          // Validasi supaya Father/Mother tidak dobel
           const seen = new Set<RelType>();
           for (const p of ortuArrEdit) {
             if (SINGLETON_TYPES.has(p.type as RelType)) {
@@ -258,7 +268,6 @@ export default function ProgressDetailClient({
         }
       }
 
-
       const res = await fetch(`${apiBase}/api/salesforce/progress/${id}`, {
         method: "PATCH",
         cache: "no-store",
@@ -277,16 +286,14 @@ export default function ProgressDetailClient({
         Object.assign(originalSiswa as object, JSON.parse(JSON.stringify(siswaEdit)));
       } else if (segment === "orangTua") {
         if (isOrtuArray) {
-          const locked = ortuArrEdit.map(p => ({ ...p, locked: true }));
+          const locked = ortuArrEdit.map((p) => ({ ...p, locked: true }));
           setOrtuArrEdit(locked);
-          // Also update originals so dirty flag resets
           (originalOrtuArr as ParentRel[]).length = 0;
           (originalOrtuArr as ParentRel[]).push(...deepClone(locked));
         } else {
           Object.assign(originalOrtuObj as object, deepClone(ortuObjEdit));
         }
       }
-
 
       await Swal.fire({
         icon: "success",
@@ -295,8 +302,8 @@ export default function ProgressDetailClient({
           segment === "dokumen"
             ? "Dokumen telah diperbarui."
             : segment === "siswa"
-              ? "Data siswa telah diperbarui."
-              : "Data orang tua telah diperbarui.",
+            ? "Data siswa telah diperbarui."
+            : "Data orang tua telah diperbarui.",
         confirmButtonText: "OK",
       });
     } catch (err) {
@@ -401,10 +408,13 @@ export default function ProgressDetailClient({
                   className="text-sm px-3 py-1 rounded-lg bg-gray-900 text-white disabled:opacity-60"
                   disabled={saving}
                   onClick={() => {
-                    const used = new Set(ortuArrEdit.map(p => p.type).filter(Boolean) as RelType[]);
-                    const order: RelType[] = ["Father", "Mother"];
-                    const firstFree = order.find(t => !used.has(t)) ?? "";
-                    setOrtuArrEdit(prev => [...prev, { type: firstFree as RelType, name: "", job: "", phone: "", email: "", address: "", locked: false }]);
+                    const used = new Set(ortuArrEdit.map((p) => p.type).filter(Boolean) as RelType[]);
+                    const order: RelType[] = [...REL_TYPE_OPTIONS];
+                    const firstFree = order.find((t) => !used.has(t)) ?? "";
+                    setOrtuArrEdit((prev) => [
+                      ...prev,
+                      { type: firstFree as RelType, name: "", job: "", phone: "", email: "", address: "", locked: false },
+                    ]);
                   }}
                 >
                   + Add
@@ -412,10 +422,10 @@ export default function ProgressDetailClient({
               )}
             </div>
 
-            {/* Object mode (your original working UI) */}
+            {/* Object mode (original) */}
             {!isOrtuArray && renderObjectEditor(ortuObjEdit, setOrtuObjEdit, [], isReadOnly, saving)}
 
-            {/* Array mode (card UI with singleton rules) */}
+            {/* Array mode (card UI + singleton rules) */}
             {isOrtuArray && (
               <>
                 {ortuArrEdit.length === 0 ? (
@@ -433,7 +443,7 @@ export default function ProgressDetailClient({
                               <button
                                 className="text-xs text-rose-600 underline disabled:opacity-60"
                                 disabled={saving}
-                                onClick={() => setOrtuArrEdit(prev => prev.filter((_, i) => i !== idx))}
+                                onClick={() => setOrtuArrEdit((prev) => prev.filter((_, i) => i !== idx))}
                               >
                                 Remove
                               </button>
@@ -448,7 +458,7 @@ export default function ProgressDetailClient({
                                 className={`border rounded px-3 py-2 ${roCls}`}
                                 value={p.type}
                                 onChange={(e) =>
-                                  setOrtuArrEdit(prev => {
+                                  setOrtuArrEdit((prev) => {
                                     const next = [...prev];
                                     next[idx] = { ...next[idx], type: e.target.value as RelType };
                                     return next;
@@ -476,7 +486,7 @@ export default function ProgressDetailClient({
                                 className={`border rounded px-3 py-2 ${roCls}`}
                                 value={p.name}
                                 onChange={(e) =>
-                                  setOrtuArrEdit(prev => {
+                                  setOrtuArrEdit((prev) => {
                                     const next = [...prev];
                                     next[idx] = { ...next[idx], name: e.target.value };
                                     return next;
@@ -494,7 +504,7 @@ export default function ProgressDetailClient({
                                 className={`border rounded px-3 py-2 ${roCls}`}
                                 value={p.job}
                                 onChange={(e) =>
-                                  setOrtuArrEdit(prev => {
+                                  setOrtuArrEdit((prev) => {
                                     const next = [...prev];
                                     next[idx] = { ...next[idx], job: e.target.value };
                                     return next;
@@ -512,7 +522,7 @@ export default function ProgressDetailClient({
                                 className={`border rounded px-3 py-2 ${roCls}`}
                                 value={p.phone}
                                 onChange={(e) =>
-                                  setOrtuArrEdit(prev => {
+                                  setOrtuArrEdit((prev) => {
                                     const next = [...prev];
                                     next[idx] = { ...next[idx], phone: e.target.value };
                                     return next;
@@ -530,7 +540,7 @@ export default function ProgressDetailClient({
                                 className={`border rounded px-3 py-2 ${roCls}`}
                                 value={p.email}
                                 onChange={(e) =>
-                                  setOrtuArrEdit(prev => {
+                                  setOrtuArrEdit((prev) => {
                                     const next = [...prev];
                                     next[idx] = { ...next[idx], email: e.target.value };
                                     return next;
@@ -550,7 +560,7 @@ export default function ProgressDetailClient({
                                 rows={2}
                                 value={p.address}
                                 onChange={(e) =>
-                                  setOrtuArrEdit(prev => {
+                                  setOrtuArrEdit((prev) => {
                                     const next = [...prev];
                                     next[idx] = { ...next[idx], address: e.target.value };
                                     return next;
@@ -591,7 +601,7 @@ export default function ProgressDetailClient({
           <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
             <div className="text-base font-medium text-slate-700 mb-3">Payment Information</div>
 
-            {(!payments || payments.length === 0) ? (
+            {!payments || payments.length === 0 ? (
               <div className="text-sm text-gray-500">Belum ada Payment Information.</div>
             ) : (
               <div className="overflow-x-auto">
@@ -687,11 +697,7 @@ export default function ProgressDetailClient({
 
           {docsDirty && (
             <div className="flex justify-end mt-4">
-              <button
-                className="px-4 py-2 rounded-lg bg-black text-white shadow disabled:opacity-60"
-                onClick={() => saveSegment("dokumen")}
-                disabled={saving}
-              >
+              <button className="px-4 py-2 rounded-lg bg-black text-white shadow disabled:opacity-60" onClick={() => saveSegment("dokumen")} disabled={saving}>
                 {savingSegment === "dokumen" ? (
                   <span className="inline-flex items-center gap-2">
                     <Spinner className="h-4 w-4" /> Saving...
