@@ -26,7 +26,7 @@ type ParentRel = {
   locked?: boolean;
 };
 
-const REL_TYPE_OPTIONS = ["Father", "Mother", "Daughter", "Son", "Sister", "Brother"] as const;
+const REL_TYPE_OPTIONS = ["Father", "Mother"] as const;
 type RelType = (typeof REL_TYPE_OPTIONS)[number];
 const SINGLETON_TYPES = new Set<RelType>(["Father", "Mother"]);
 
@@ -386,7 +386,7 @@ export default function ProgressDetailClient({
                   disabled={saving}
                   onClick={() => {
                     const used = new Set(ortuArrEdit.map(p => p.type).filter(Boolean) as RelType[]);
-                    const order: RelType[] = ["Father", "Mother", "Daughter", "Son", "Sister", "Brother"];
+                    const order: RelType[] = ["Father", "Mother"];
                     const firstFree = order.find(t => !used.has(t)) ?? "";
                     setOrtuArrEdit(prev => [...prev, { type: firstFree as RelType, name: "", job: "", phone: "", email: "", address: "", locked: false }]);
                   }}
