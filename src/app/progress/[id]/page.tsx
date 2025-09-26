@@ -7,12 +7,22 @@ type ApiDoc = {
   Url__c?: string | null;
 };
 
+type ApiPayment = {
+  Id: string;
+  Name: string;
+  Amount__c?: number | null;
+  Payment_Status__c?: string | null;
+  Virtual_Account_No__c?: string | null;
+  Payment_Channel__r?: { Payment_Channel_Bank__c?: string | null } | null;
+};
+
 type ApiData = {
   progress: { Id: string; Name: string; Status__c?: string | null };
   siswa: Record<string, unknown>;
   orangTua?: Record<string, unknown> | null;
   dokumen?: ApiDoc[] | null;
   photoVersionId?: string | null;
+  payments?: ApiPayment[] | null;
 };
 
 type ClientDoc = {
@@ -32,6 +42,7 @@ type ClientProps = {
   apiBase: string;
   cookieHeader: string;
   photoVersionId: string | null;
+  payments: ApiPayment[]; // NEW
 };
 
 export default async function ProgressDetail({
@@ -68,7 +79,7 @@ export default async function ProgressDetail({
     return <div className="p-6">Error: {json.error || "Unknown error"}</div>;
   }
 
-  const { progress, siswa, orangTua, dokumen, photoVersionId } = json.data;
+  const { progress, siswa, orangTua, dokumen, photoVersionId, payments } = json.data;
 
   return (
     <main className="min-h-screen flex justify-center bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 p-6">
@@ -90,6 +101,7 @@ export default async function ProgressDetail({
           apiBase={base}
           cookieHeader={cookieHeader}
           photoVersionId={photoVersionId ?? null}
+          payments={(payments ?? []) as ApiPayment[]}
         />
       </div>
     </main>

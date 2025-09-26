@@ -26,6 +26,15 @@ type ParentRel = {
   locked?: boolean;
 };
 
+type PaymentInfo = {
+  Id: string;
+  Name: string;
+  Amount__c?: number | null;
+  Payment_Status__c?: string | null;
+  Virtual_Account_No__c?: string | null;
+  Payment_Channel__r?: { Payment_Channel_Bank__c?: string | null } | null;
+};
+
 const REL_TYPE_OPTIONS = ["Father", "Mother", "Daughter", "Son", "Sister", "Brother"] as const;
 type RelType = (typeof REL_TYPE_OPTIONS)[number];
 const SINGLETON_TYPES = new Set<RelType>(["Father", "Mother"]);
@@ -60,6 +69,7 @@ type ProgressDetailClientProps = {
   dokumen: Doc[];
   apiBase: string;
   photoVersionId: string | null;
+  payments: PaymentInfo[]; // NEW
 };
 
 function deepClone<T>(v: T): T {
@@ -98,6 +108,9 @@ function blankParent(): ParentRel {
   return { type: "", name: "", job: "", phone: "", email: "", address: "", locked: false };
 }
 
+const fmtIDR = (v?: number | null) =>
+  typeof v === "number" ? new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(v) : "—";
+
 export default function ProgressDetailClient({
   id,
   siswa,
@@ -105,6 +118,7 @@ export default function ProgressDetailClient({
   dokumen,
   apiBase,
   photoVersionId,
+  payments
 }: ProgressDetailClientProps) {
   const photoUrl = photoVersionId
     ? `${apiBase}/api/salesforce/files/version/${photoVersionId}/data`
@@ -568,6 +582,37 @@ export default function ProgressDetailClient({
                     "Save"
                   )}
                 </button>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
+            <div className="text-base font-medium text-slate-700 mb-3">Payment Information</div>
+
+            {(!payments || payments.length === 0) ? (
+              <div className="text-sm text-gray-500">Belum ada Payment Information.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-slate-600">
+                      <th className="py-2 pr-4">Amount</th>
+                      <th className="py-2 pr-4">Payment Status</th>
+                      <th className="py-2 pr-4">Payment Channel Bank</th>
+                      <th className="py-2 pr-4">Virtual Account No</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payments.map((p) => (
+                      <tr key={p.Id} className="border-t border-gray-100">
+                        <td className="py-2 pr-4 whitespace-nowrap">{fmtIDR(p.Amount__c)}</td>
+                        <td className="py-2 pr-4">{p.Payment_Status__c ?? "—"}</td>
+                        <td className="py-2 pr-4">{p.Payment_Channel__r?.Payment_Channel_Bank__c ?? "—"}</td>
+                        <td className="py-2 pr-4">{p.Virtual_Account_No__c ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

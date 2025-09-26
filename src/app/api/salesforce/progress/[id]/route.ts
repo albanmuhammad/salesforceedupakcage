@@ -13,6 +13,18 @@ type Progress = {
   AccountId: string | null;
 };
 
+type PaymentInfoRow = {
+  Id: string;
+  Name: string;
+  Amount__c?: number | null;
+  Payment_Status__c?: string | null;
+  Virtual_Account_No__c?: string | null;
+  Payment_Channel__c?: string | null;
+  Payment_Channel__r?: {
+    Payment_Channel_Bank__c?: string | null;
+  } | null;
+};
+
 type OpportunityRecord = {
   Id: string;
   Is_Active__c?: boolean;
@@ -397,6 +409,20 @@ export async function GET(
     photoVersionId = versions[0]?.Id ?? null;
   }
 
+  const qPayments = `
+    SELECT
+      Id, Name,
+      Amount__c,
+      Payment_Status__c,
+      Virtual_Account_No__c,
+      Payment_Channel__c,
+      Payment_Channel__r.Payment_Channel_Bank__c
+    FROM Payment_Information__c
+    WHERE Application_Progress__c = '${id}'
+    ORDER BY CreatedDate DESC
+  `;
+  const payments = await sfQuery<PaymentInfoRow>(qPayments);
+
   // 5) Orang Tua (Relationships untuk applicant ini)
   let orangTua: ParentRel[] = [];
   if (progress.AccountId) {
@@ -450,6 +476,7 @@ export async function GET(
       orangTua: orangTua,
       dokumen: docs, // sudah include ContentVersionId hasil match Title
       photoVersionId, // untuk <img src="/api/salesforce/files/version/{id}/data">
+      payments,
       ...debugPayload,
     },
   });
