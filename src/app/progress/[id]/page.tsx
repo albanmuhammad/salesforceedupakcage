@@ -14,6 +14,7 @@ type ApiPayment = {
   Payment_Status__c?: string | null;
   Virtual_Account_No__c?: string | null;
   Payment_Channel__r?: { Payment_Channel_Bank__c?: string | null } | null;
+  Payment_For__c?: string | null;
 };
 
 type ApiData = {

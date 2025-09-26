@@ -23,6 +23,7 @@ type PaymentInfoRow = {
   Payment_Channel__r?: {
     Payment_Channel_Bank__c?: string | null;
   } | null;
+  Payment_For__c?: string | null;
 };
 
 type OpportunityRecord = {
@@ -416,10 +417,11 @@ export async function GET(
       Payment_Status__c,
       Virtual_Account_No__c,
       Payment_Channel__c,
-      Payment_Channel__r.Payment_Channel_Bank__c
+      Payment_Channel__r.Payment_Channel_Bank__c,
+      Payment_For__c
     FROM Payment_Information__c
     WHERE Application_Progress__c = '${id}'
-    ORDER BY CreatedDate DESC
+    ORDER BY CreatedDate ASC
   `;
   const payments = await sfQuery<PaymentInfoRow>(qPayments);
 

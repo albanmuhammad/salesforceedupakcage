@@ -33,6 +33,7 @@ type PaymentInfo = {
   Payment_Status__c?: string | null;
   Virtual_Account_No__c?: string | null;
   Payment_Channel__r?: { Payment_Channel_Bank__c?: string | null } | null;
+  Payment_For__c?: string | null;
 };
 
 
@@ -599,6 +600,7 @@ export default function ProgressDetailClient({
                     <tr className="text-left text-slate-600">
                       <th className="py-2 pr-4">Amount</th>
                       <th className="py-2 pr-4">Payment Status</th>
+                      <th className="py-2 pr-4">Payment For</th>
                       <th className="py-2 pr-4">Payment Channel Bank</th>
                       <th className="py-2 pr-4">Virtual Account No</th>
                     </tr>
@@ -608,6 +610,7 @@ export default function ProgressDetailClient({
                       <tr key={p.Id} className="border-t border-gray-100">
                         <td className="py-2 pr-4 whitespace-nowrap">{fmtIDR(p.Amount__c)}</td>
                         <td className="py-2 pr-4">{p.Payment_Status__c ?? "—"}</td>
+                        <td className="py-2 pr-4">{p.Payment_For__c ?? "—"}</td>
                         <td className="py-2 pr-4">{p.Payment_Channel__r?.Payment_Channel_Bank__c ?? "—"}</td>
                         <td className="py-2 pr-4">{p.Virtual_Account_No__c ?? "—"}</td>
                       </tr>
