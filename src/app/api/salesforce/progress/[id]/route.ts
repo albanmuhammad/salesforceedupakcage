@@ -20,9 +20,7 @@ type PaymentInfoRow = {
   Payment_Status__c?: string | null;
   Virtual_Account_No__c?: string | null;
   Payment_Channel__c?: string | null;
-  Payment_Channel__r?: {
-    Payment_Channel_Bank__c?: string | null;
-  } | null;
+  Payment_Channel__r?: { Payment_Channel_Bank__c?: string | null } | null;
   Payment_For__c?: string | null;
 };
 
@@ -107,7 +105,6 @@ type PatchBody =
 
 // ==== UTILS ====
 function esc(s: string) {
-  // Minimal escape untuk query literal single-quoted
   return s.replace(/'/g, "\\'");
 }
 
@@ -123,19 +120,14 @@ export async function GET(
   const supabase = await createClient();
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   if (userErr || !userData?.user?.email) {
-    return NextResponse.json(
-      { ok: false, error: "unauthorized" },
-      { status: 401 }
-    );
+    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   const userEmail = userData.user.email.toLowerCase();
 
   // Params
   const { id: rawId } = await ctx.params;
   const id = esc(String(rawId));
-  console.log(
-    `[${traceId}] HIT /api/salesforce/progress/${id} as ${userEmail}`
-  );
+  console.log(`[${traceId}] HIT /api/salesforce/progress/${id} as ${userEmail}`);
 
   // 1) Opportunity
   const opps = await sfQuery<Progress>(`
@@ -146,13 +138,10 @@ export async function GET(
   `);
   const progress: Progress | null = opps[0] ?? null;
   if (!progress) {
-    return NextResponse.json(
-      { ok: false, error: "not_found" },
-      { status: 404 }
-    );
+    return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
   }
 
-  // 2) Validasi akses + ambil Account minimal (plus Phone & School__c)
+  // 2) Validasi akses + ambil Account minimal
   let allowed = false;
   let siswaAccount: AccountInfo | null = null;
 
@@ -168,7 +157,6 @@ export async function GET(
 
     if (account) {
       siswaAccount = account;
-
       if (account.IsPersonAccount) {
         const personEmail = (account.PersonEmail || "").toLowerCase();
         if (personEmail && personEmail === userEmail) {
@@ -192,11 +180,7 @@ export async function GET(
   // Fallback: OCR
   let ocrContacts: string[] = [];
   if (!allowed) {
-    const roles = await sfQuery<{
-      Id: string;
-      IsPrimary: boolean;
-      ContactId: string;
-    }>(`
+    const roles = await sfQuery<{ Id: string; IsPrimary: boolean; ContactId: string }>(`
       SELECT Id, IsPrimary, ContactId
       FROM OpportunityContactRole
       WHERE OpportunityId='${esc(progress.Id)}'
@@ -220,13 +204,10 @@ export async function GET(
   }
 
   if (!allowed) {
-    return NextResponse.json(
-      { ok: false, error: "forbidden" },
-      { status: 403 }
-    );
+    return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
 
-  // 3) Dokumen (custom object) — ambil baris Account_Document__c
+  // 3) Dokumen Account_Document__c
   const rawDocs = await sfQuery<DocRow>(`
     SELECT Id, Name, Document_Type__c, Document_Link__c
     FROM Account_Document__c
@@ -235,7 +216,7 @@ export async function GET(
   `);
   console.log(`[${traceId}] account documents count: ${rawDocs.length}`);
 
-  // 4) Perluas pencarian file via ContentDocumentLink pada Opportunity, Account, dan semua Contact di OCR
+  // 4) Perluas pencarian file via CDL pada Opportunity, Account, dan OCR Contacts
   const candidateIds = new Set<string>();
   candidateIds.add(progress.Id);
   if (progress.AccountId) candidateIds.add(progress.AccountId);
@@ -256,24 +237,10 @@ export async function GET(
   }
 
   console.log(`[${traceId}] CDL count (expanded) = ${cdl.length}`);
-  if (cdl.length) {
-    console.log(
-      `[${traceId}] some CDL`,
-      cdl.slice(0, 5).map((r) => ({
-        led: r.LinkedEntityId,
-        title: r.ContentDocument.Title,
-        ver: r.ContentDocument.LatestPublishedVersionId,
-      }))
-    );
-  }
 
   // ==== Helper: ekstrak ID dari URL (068/069) ====
-  function extractIdsFromUrl(url?: string | null): {
-    verId?: string;
-    docId?: string;
-  } {
+  function extractIdsFromUrl(url?: string | null): { verId?: string; docId?: string } {
     if (!url) return {};
-    // Cari 068… (ContentVersionId) atau 069… (ContentDocumentId)
     const m068 = url.match(/(?:^|[^\w])(068[0-9A-Za-z]{15,18})/);
     if (m068?.[1]) return { verId: m068[1] };
     const m069 = url.match(/(?:^|[^\w])(069[0-9A-Za-z]{15,18})/);
@@ -281,37 +248,23 @@ export async function GET(
     return {};
   }
 
-  // ==== 1) Buat index dari CDL: 069 -> 068 (Latest) + judul ternormalisasi ====
-  const docIdToLatestVer = new Map<string, string>(); // 069 -> 068
+  // ==== index CDL: 069 -> 068 (Latest) + judul ternormalisasi ====
+  const docIdToLatestVer = new Map<string, string>();
   const normalizedTitleToVer = new Map<string, string>();
-
-  function normTitle(s?: string | null) {
-    return (s || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim();
-  }
+  const normTitle = (s?: string | null) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
   for (const r of cdl) {
     const latest = r.ContentDocument.LatestPublishedVersionId;
     const docId = r.ContentDocumentId;
-    if (docId && latest && !docIdToLatestVer.has(docId)) {
-      docIdToLatestVer.set(docId, latest);
-    }
+    if (docId && latest && !docIdToLatestVer.has(docId)) docIdToLatestVer.set(docId, latest);
     const t = normTitle(r.ContentDocument.Title);
-    if (t && latest && !normalizedTitleToVer.has(t)) {
-      normalizedTitleToVer.set(t, latest);
-    }
+    if (t && latest && !normalizedTitleToVer.has(t)) normalizedTitleToVer.set(t, latest);
   }
 
-  // ==== 2) Siapkan batch lookup untuk 069 yang belum ada di map (opsional & hemat kueri) ====
   const missing069 = new Set<string>();
-
-  // Koleksi kandidat ContentVersionId untuk tiap dok supaya tidak query berulang
   const docIdFromLink: Array<{ idx: number; docId: string }> = [];
   const verIdFromLink: Array<{ idx: number; verId: string }> = [];
 
-  // Pre-scan rawDocs untuk ambil ID dari link
   rawDocs.forEach((d, idx) => {
     const { verId, docId } = extractIdsFromUrl(d.Document_Link__c);
     if (verId) verIdFromLink.push({ idx, verId });
@@ -321,89 +274,42 @@ export async function GET(
     }
   });
 
-  // Jika ada 069 yang belum punya latest version di map, batch query ContentDocument
   if (missing069.size) {
-    const inList = Array.from(missing069)
-      .map((s) => `'${esc(s)}'`)
-      .join(",");
-    const rows = await sfQuery<{
-      Id: string;
-      LatestPublishedVersionId: string;
-    }>(`
-    SELECT Id, LatestPublishedVersionId
-    FROM ContentDocument
-    WHERE Id IN (${inList})
-  `);
+    const inList = Array.from(missing069).map((s) => `'${esc(s)}'`).join(",");
+    const rows = await sfQuery<{ Id: string; LatestPublishedVersionId: string }>(`
+      SELECT Id, LatestPublishedVersionId
+      FROM ContentDocument
+      WHERE Id IN (${inList})
+    `);
     for (const r of rows) {
-      if (r.Id && r.LatestPublishedVersionId) {
-        docIdToLatestVer.set(r.Id, r.LatestPublishedVersionId);
-      }
+      if (r.Id && r.LatestPublishedVersionId) docIdToLatestVer.set(r.Id, r.LatestPublishedVersionId);
     }
   }
 
-  // ==== 3) Bangun hasil 'docs' dengan prioritas:
-  // (a) URL punya 068 -> pakai itu
-  // (b) URL punya 069 -> map ke 068 via docIdToLatestVer
-  // (c) Cocokkan judul ternormalisasi (Name vs Title)
-  // (d) Gagal -> null
   const docs = rawDocs.map((d, i) => {
-    // (a) langsung 068 dari URL
     const verDirect = verIdFromLink.find((x) => x.idx === i)?.verId;
     if (verDirect) {
-      return {
-        Id: d.Id,
-        Name: d.Name,
-        Type__c: d.Document_Type__c ?? null,
-        Url__c: d.Document_Link__c ?? null,
-        ContentVersionId: verDirect,
-      };
+      return { Id: d.Id, Name: d.Name, Type__c: d.Document_Type__c ?? null, Url__c: d.Document_Link__c ?? null, ContentVersionId: verDirect };
     }
-
-    // (b) 069 dari URL → 068 via map
     const docFromUrl = docIdFromLink.find((x) => x.idx === i)?.docId;
-    const verFrom069 = docFromUrl
-      ? docIdToLatestVer.get(docFromUrl) ?? null
-      : null;
+    const verFrom069 = docFromUrl ? docIdToLatestVer.get(docFromUrl) ?? null : null;
     if (verFrom069) {
-      return {
-        Id: d.Id,
-        Name: d.Name,
-        Type__c: d.Document_Type__c ?? null,
-        Url__c: d.Document_Link__c ?? null,
-        ContentVersionId: verFrom069,
-      };
+      return { Id: d.Id, Name: d.Name, Type__c: d.Document_Type__c ?? null, Url__c: d.Document_Link__c ?? null, ContentVersionId: verFrom069 };
     }
-
-    // (c) fallback judul
     const key = normTitle(d.Name);
     const verFromTitle = key ? normalizedTitleToVer.get(key) ?? null : null;
-
-    return {
-      Id: d.Id,
-      Name: d.Name,
-      Type__c: d.Document_Type__c ?? null,
-      Url__c: d.Document_Link__c ?? null,
-      ContentVersionId: verFromTitle, // bisa null kalau tidak ketemu
-    };
+    return { Id: d.Id, Name: d.Name, Type__c: d.Document_Type__c ?? null, Url__c: d.Document_Link__c ?? null, ContentVersionId: verFromTitle };
   });
 
-  // Pilih foto: judul mengandung "pas foto", jika tidak ada ambil entri pertama
-  const photo =
-    cdl.find((x) =>
-      (x.ContentDocument.Title || "").toLowerCase().includes("pas foto")
-    ) || cdl[0];
-
-  let photoVersionId: string | null =
-    photo?.ContentDocument.LatestPublishedVersionId || null;
-
-  // (opsional) fallback verifikasi via ContentVersion jika title kosong atau tidak ada LatestPublishedVersionId
+  // Foto
+  const photo = cdl.find((x) => (x.ContentDocument.Title || "").toLowerCase().includes("pas foto")) || cdl[0];
+  let photoVersionId: string | null = photo?.ContentDocument.LatestPublishedVersionId || null;
   if (!photoVersionId && cdl.length) {
     const docIds = cdl.map((r) => `'${esc(r.ContentDocumentId)}'`).join(",");
     const versions = await sfQuery<VersionRow>(`
       SELECT Id, ContentDocumentId, IsLatest
       FROM ContentVersion
-      WHERE ContentDocumentId IN (${docIds})
-        AND IsLatest = true
+      WHERE ContentDocumentId IN (${docIds}) AND IsLatest = true
       ORDER BY Id DESC
       LIMIT 1
     `);
@@ -411,21 +317,15 @@ export async function GET(
   }
 
   const qPayments = `
-    SELECT
-      Id, Name,
-      Amount__c,
-      Payment_Status__c,
-      Virtual_Account_No__c,
-      Payment_Channel__c,
-      Payment_Channel__r.Payment_Channel_Bank__c,
-      Payment_For__c
+    SELECT Id, Name, Amount__c, Payment_Status__c, Virtual_Account_No__c,
+           Payment_Channel__c, Payment_Channel__r.Payment_Channel_Bank__c, Payment_For__c
     FROM Payment_Information__c
     WHERE Application_Progress__c = '${id}'
     ORDER BY CreatedDate ASC
   `;
   const payments = await sfQuery<PaymentInfoRow>(qPayments);
 
-  // 5) Orang Tua (Relationships untuk applicant ini)
+  // 5) Orang Tua
   let orangTua: ParentRel[] = [];
   if (progress.AccountId) {
     const accIdSafe = progress.AccountId.replace(/'/g, "\\'");
@@ -448,6 +348,24 @@ export async function GET(
       email: r.Contact__r?.Email ?? "",
       address: r.Contact__r?.Address__c ?? "",
     }));
+  }
+
+  // 6) Picklist Type__c (ACTIVE)
+  let relTypeOptions: string[] = [];
+  try {
+    const conn = await getConn();
+    const desc: any = await conn.sobject("Relationship__c").describe();
+    const typeField: any = Array.isArray(desc?.fields) ? desc.fields.find((f: any) => f?.name === "Type__c") : null;
+    const values: string[] = Array.isArray(typeField?.picklistValues)
+      ? typeField.picklistValues
+          .filter((p: any) => p?.active)
+          .map((p: any) => p?.value)
+          .filter((v: any): v is string => typeof v === "string" && v.length > 0)
+      : [];
+    console.log(`[${traceId}] relTypeOptions from SF:`, values);
+    relTypeOptions = values;
+  } catch (e) {
+    console.log(`[${traceId}] describe Relationship__c failed`, e);
   }
 
   const debugPayload = debug
@@ -475,10 +393,11 @@ export async function GET(
     data: {
       progress,
       siswa: siswaAccount,
-      orangTua: orangTua,
-      dokumen: docs, // sudah include ContentVersionId hasil match Title
-      photoVersionId, // untuk <img src="/api/salesforce/files/version/{id}/data">
+      orangTua,
+      dokumen: docs,
+      photoVersionId,
       payments,
+      relTypeOptions, // <<<<<<<<<< send to client
       ...debugPayload,
     },
   });
@@ -497,7 +416,6 @@ function normalizeBirthdate(input: unknown): string | undefined {
 
 /* ===================== PATCH ===================== */
 
-/** Payload aman untuk update Account (Id wajib, field lain opsional) */
 type AccountUpdatePayload = {
   Id: string;
   PersonBirthdate?: string;
@@ -511,14 +429,10 @@ export async function PATCH(
   const { id: rawId } = await ctx.params;
   const id = String(rawId);
 
-  // ✅ Auth sama seperti GET
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData?.user?.id) {
-    return NextResponse.json(
-      { ok: false, error: "unauthorized" },
-      { status: 401 }
-    );
+    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
   const body = (await req.json()) as PatchBody;
@@ -527,100 +441,47 @@ export async function PATCH(
   switch (body.segment) {
     case "activate": {
       try {
-        const cur = (await conn
-          .sobject("Opportunity")
-          .retrieve(id)) as OpportunityRecord;
-        if (!cur?.Id)
-          return NextResponse.json(
-            { ok: false, error: "not_found" },
-            { status: 404 }
-          );
+        const cur = (await conn.sobject("Opportunity").retrieve(id)) as OpportunityRecord;
+        if (!cur?.Id) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
         if (!cur.Is_Active__c && cur.StageName !== "Closed Lost") {
-          const upd = await conn.sobject("Opportunity").update({
-            Id: id,
-            Is_Active__c: true,
-          });
+          const upd = await conn.sobject("Opportunity").update({ Id: id, Is_Active__c: true });
           if (!upd.success) {
-            return NextResponse.json(
-              { ok: false, error: "sf_update_failed" },
-              { status: 500 }
-            );
+            return NextResponse.json({ ok: false, error: "sf_update_failed" }, { status: 500 });
           }
         }
-        const q = (await conn
-          .sobject("Opportunity")
-          .retrieve(id)) as OpportunityRecord;
-        const opp = {
-          Id: String(q.Id),
-          StageName: q.StageName ?? null,
-          Web_Stage__c: q.Web_Stage__c ?? null,
-          Is_Active__c: !!q.Is_Active__c,
-        };
+        const q = (await conn.sobject("Opportunity").retrieve(id)) as OpportunityRecord;
+        const opp = { Id: String(q.Id), StageName: q.StageName ?? null, Web_Stage__c: q.Web_Stage__c ?? null, Is_Active__c: !!q.Is_Active__c };
         return NextResponse.json({ ok: true, opp });
       } catch (err: unknown) {
-        const errorMessage =
-          err instanceof Error ? err.message : "internal_error";
-        return NextResponse.json(
-          { ok: false, error: errorMessage },
-          { status: 500 }
-        );
+        const errorMessage = err instanceof Error ? err.message : "internal_error";
+        return NextResponse.json({ ok: false, error: errorMessage }, { status: 500 });
       }
     }
 
     case "dokumen": {
-      const docs = Array.isArray(
-        (body as Extract<PatchBody, { segment: "dokumen" }>).dokumen
-      )
+      const docs = Array.isArray((body as Extract<PatchBody, { segment: "dokumen" }>).dokumen)
         ? (body as Extract<PatchBody, { segment: "dokumen" }>).dokumen
         : null;
-      if (!docs) {
-        return NextResponse.json(
-          { ok: false, error: "invalid_payload_dokumen" },
-          { status: 400 }
-        );
-      }
+      if (!docs) return NextResponse.json({ ok: false, error: "invalid_payload_dokumen" }, { status: 400 });
 
-      const types = Array.from(
-        new Set(
-          docs
-            .map((d) => (d.Type__c ?? "").trim())
-            .filter((t): t is string => t.length > 0)
-        )
-      );
+      const types = Array.from(new Set(docs.map((d) => (d.Type__c ?? "").trim()).filter((t): t is string => t.length > 0)));
 
       const existingByType = new Map<string, { Id: string }>();
       if (types.length) {
         const inList = types.map((t) => `'${esc(t)}'`).join(",");
-        const qRes: QueryResult<{ Id: string; Document_Type__c: string }> =
-          await conn.query(
-            `SELECT Id, Document_Type__c
-             FROM Account_Document__c
-             WHERE Application_Progress__c='${esc(
-               id
-             )}' AND Document_Type__c IN (${inList})`
-          );
+        const qRes: QueryResult<{ Id: string; Document_Type__c: string }> = await conn.query(
+          `SELECT Id, Document_Type__c
+           FROM Account_Document__c
+           WHERE Application_Progress__c='${esc(id)}' AND Document_Type__c IN (${inList})`
+        );
         for (const r of qRes.records) {
-          if (r.Document_Type__c) {
-            existingByType.set(r.Document_Type__c, { Id: r.Id });
-          }
+          if (r.Document_Type__c) existingByType.set(r.Document_Type__c, { Id: r.Id });
         }
       }
 
-      const toInsert: Array<{
-        Name: string;
-        Application_Progress__c: string;
-        Document_Type__c: string;
-        Document_Link__c: string;
-      }> = [];
-
-      const toUpdate: Array<{
-        Id: string;
-        Name: string;
-        Application_Progress__c: string;
-        Document_Type__c: string;
-        Document_Link__c: string;
-      }> = [];
+      const toInsert: Array<{ Name: string; Application_Progress__c: string; Document_Type__c: string; Document_Link__c: string }> = [];
+      const toUpdate: Array<{ Id: string; Name: string; Application_Progress__c: string; Document_Type__c: string; Document_Link__c: string }> = [];
 
       for (const d of docs) {
         const type = (d.Type__c ?? "").trim();
@@ -629,67 +490,37 @@ export async function PATCH(
         const link = (d.Url__c ?? "").trim();
         const name = d.Name?.trim() || type || "Document";
 
-        const base = {
-          Name: name,
-          Application_Progress__c: id,
-          Document_Type__c: type,
-          Document_Link__c: link,
-        };
+        const base = { Name: name, Application_Progress__c: id, Document_Type__c: type, Document_Link__c: link };
 
         const existing = d.Id ? { Id: d.Id } : existingByType.get(type);
-        if (existing?.Id) {
-          toUpdate.push({ Id: existing.Id, ...base });
-        } else {
-          toInsert.push(base);
-        }
+        if (existing?.Id) toUpdate.push({ Id: existing.Id, ...base });
+        else toInsert.push(base);
       }
 
-      if (toUpdate.length)
-        await conn.sobject("Account_Document__c").update(toUpdate);
-      if (toInsert.length)
-        await conn.sobject("Account_Document__c").insert(toInsert);
+      if (toUpdate.length) await conn.sobject("Account_Document__c").update(toUpdate);
+      if (toInsert.length) await conn.sobject("Account_Document__c").insert(toInsert);
 
       return NextResponse.json({ ok: true });
     }
 
     case "siswa": {
       try {
-        const opp = (await conn.sobject("Opportunity").retrieve(id)) as {
-          Id?: string;
-          AccountId?: string | null;
-        };
+        const opp = (await conn.sobject("Opportunity").retrieve(id)) as { Id?: string; AccountId?: string | null };
         const accountId = opp?.AccountId || null;
-        if (!accountId) {
-          return NextResponse.json(
-            { ok: false, error: "no_account_on_opportunity" },
-            { status: 400 }
-          );
-        }
+        if (!accountId) return NextResponse.json({ ok: false, error: "no_account_on_opportunity" }, { status: 400 });
 
-        const src =
-          (body as Extract<PatchBody, { segment: "siswa" }>).siswa || {};
+        const src = (body as Extract<PatchBody, { segment: "siswa" }>).siswa || {};
         const updateBody: AccountUpdatePayload = { Id: accountId };
 
-        const birth = normalizeBirthdate(
-          (src as Record<string, unknown>)["PersonBirthdate"]
-        );
+        const birth = normalizeBirthdate((src as Record<string, unknown>)["PersonBirthdate"]);
         if (birth) updateBody.PersonBirthdate = birth;
 
         if (typeof (src as Record<string, unknown>)["Phone"] === "string") {
-          updateBody.Phone = String(
-            (src as Record<string, unknown>)["Phone"]
-          ).trim();
+          updateBody.Phone = String((src as Record<string, unknown>)["Phone"]).trim();
         }
 
-        const updRes: SaveResult = await conn
-          .sobject("Account")
-          .update(updateBody);
-        if (!updRes.success) {
-          return NextResponse.json(
-            { ok: false, error: "sf_update_failed" },
-            { status: 500 }
-          );
-        }
+        const updRes: SaveResult = await conn.sobject("Account").update(updateBody);
+        if (!updRes.success) return NextResponse.json({ ok: false, error: "sf_update_failed" }, { status: 500 });
 
         return NextResponse.json({ ok: true });
       } catch (err: unknown) {
@@ -700,97 +531,46 @@ export async function PATCH(
 
     case "orangTua": {
       try {
-        // Ambil Account & PersonContactId (003…)
-        const opp = (await conn.sobject("Opportunity").retrieve(id)) as {
-          Id?: string;
-          AccountId?: string | null;
-        };
+        const opp = (await conn.sobject("Opportunity").retrieve(id)) as { Id?: string; AccountId?: string | null };
         const accountId = opp?.AccountId || null;
-        if (!accountId) {
-          return NextResponse.json(
-            { ok: false, error: "no_account_on_opportunity" },
-            { status: 400 }
-          );
-        }
+        if (!accountId) return NextResponse.json({ ok: false, error: "no_account_on_opportunity" }, { status: 400 });
 
-        const acc = (await conn.sobject("Account").retrieve(accountId)) as {
-          Id?: string;
-          PersonContactId?: string | null;
-        };
-        const studentContactId = acc?.PersonContactId || null; // Related_Contact__c
+        const acc = (await conn.sobject("Account").retrieve(accountId)) as { Id?: string; PersonContactId?: string | null };
+        const studentContactId = acc?.PersonContactId || null;
 
-        const items = (body as Extract<PatchBody, { segment: "orangTua" }>)
-          .orangTua;
-        if (!Array.isArray(items)) {
-          return NextResponse.json(
-            { ok: false, error: "invalid_payload_orangTua" },
-            { status: 400 }
-          );
-        }
+        const items = (body as Extract<PatchBody, { segment: "orangTua" }>).orangTua;
+        if (!Array.isArray(items)) return NextResponse.json({ ok: false, error: "invalid_payload_orangTua" }, { status: 400 });
 
         for (const p of items) {
           const type = (p.type || "").trim();
           const name = (p.name || "").trim();
           if (!type || !name) continue;
 
-          // Upsert Contact (orang tua)
+          // Upsert Contact
           let contactId = p.contactId || null;
-          const contactPayload: {
-            Id?: string;
-            LastName: string;
-            Job__c?: string | null;
-            Phone?: string | null;
-            Email?: string | null;
-            Address__c?: string | null;
-          } = {
-            LastName: name,
-            Job__c: (p.job || "").trim() || null,
-            Phone: (p.phone || "").trim() || null,
-            Email: (p.email || "").trim() || null,
-            Address__c: (p.address || "").trim() || null,
-          };
+          const contactPayload: { Id?: string; LastName: string; Job__c?: string | null; Phone?: string | null; Email?: string | null; Address__c?: string | null } =
+            { LastName: name, Job__c: (p.job || "").trim() || null, Phone: (p.phone || "").trim() || null, Email: (p.email || "").trim() || null, Address__c: (p.address || "").trim() || null };
 
           if (contactId) {
-            await conn
-              .sobject("Contact")
-              .update({ Id: contactId, ...contactPayload });
+            await conn.sobject("Contact").update({ Id: contactId, ...contactPayload });
           } else {
             const ins = await conn.sobject("Contact").insert(contactPayload);
-            if (!ins.success) {
-              return NextResponse.json(
-                { ok: false, error: "contact_insert_failed" },
-                { status: 500 }
-              );
-            }
+            if (!ins.success) return NextResponse.json({ ok: false, error: "contact_insert_failed" }, { status: 500 });
             contactId = ins.id as string;
           }
 
           // Upsert Relationship__c
-          const relBase: {
-            Id?: string;
-            Type__c: string;
-            Contact__c: string;
-            Related_Contact__c?: string;
-          } = {
+          const relBase: { Id?: string; Type__c: string; Contact__c: string; Related_Contact__c?: string } = {
             Type__c: type,
-            Contact__c: contactId,
-            ...(studentContactId
-              ? { Related_Contact__c: studentContactId }
-              : {}),
+            Contact__c: contactId!,
+            ...(studentContactId ? { Related_Contact__c: studentContactId } : {}),
           };
 
           if (p.relationshipId) {
-            await conn
-              .sobject("Relationship__c")
-              .update({ Id: p.relationshipId, ...relBase });
+            await conn.sobject("Relationship__c").update({ Id: p.relationshipId, ...relBase });
           } else {
             const r = await conn.sobject("Relationship__c").insert(relBase);
-            if (!r.success) {
-              return NextResponse.json(
-                { ok: false, error: "relationship_insert_failed" },
-                { status: 500 }
-              );
-            }
+            if (!r.success) return NextResponse.json({ ok: false, error: "relationship_insert_failed" }, { status: 500 });
           }
         }
 
@@ -802,9 +582,6 @@ export async function PATCH(
     }
 
     default:
-      return NextResponse.json(
-        { ok: false, error: "unsupported segment" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "unsupported segment" }, { status: 400 });
   }
 }
