@@ -102,9 +102,6 @@ export default async function ProgressDetail({
           <h1 className="text-2xl font-semibold text-white drop-shadow-sm">
             {progress.Name}
           </h1>
-          <div className="text-sm text-blue-50">
-            Status: {progress.Status__c || "—"}
-          </div>
         </header>
 
         <ProgressClient
