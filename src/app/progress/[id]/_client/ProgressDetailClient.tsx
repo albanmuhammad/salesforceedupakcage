@@ -16,7 +16,7 @@ type Doc = {
 
 type ParentRel = {
   relationshipId?: string;
-  type: RelType | "";
+  type: string; // <<<<<< dinamis, bukan union literal
   contactId?: string;
   name: string;
   job: string;
@@ -36,14 +36,8 @@ type PaymentInfo = {
   Payment_For__c?: string | null;
 };
 
-/**
- * NOTE:
- * Untuk saat ini picklist Type menggunakan fallback lokal,
- * hanya menampilkan "Father" dan "Mother".
- */
-const REL_TYPE_OPTIONS = ["Father", "Mother"] as const;
-type RelType = (typeof REL_TYPE_OPTIONS)[number];
-const SINGLETON_TYPES = new Set<RelType>(["Father", "Mother"]);
+// Hanya Father & Mother yang singleton (tidak boleh dobel)
+const SINGLETON_TYPES = new Set<string>(["Father", "Mother", "Son"]); // <<<<<<
 
 const LABELS: Record<string, string> = {
   Name: "Name",
@@ -76,6 +70,7 @@ type ProgressDetailClientProps = {
   apiBase: string;
   photoVersionId: string | null;
   payments: PaymentInfo[];
+  relTypeOptions: string[]; // <<<<<< dari server
 };
 
 function deepClone<T>(v: T): T {
@@ -106,7 +101,7 @@ function Spinner({ className = "h-5 w-5" }: { className?: string }) {
     </svg>
   );
 }
-function typeDisabledInRow(type: RelType, i: number, list: ParentRel[]) {
+function typeDisabledInRow(type: string, i: number, list: ParentRel[]) {
   if (!SINGLETON_TYPES.has(type)) return false;
   return list.some((p, j) => j !== i && p.type === type);
 }
@@ -116,11 +111,7 @@ function blankParent(): ParentRel {
 
 const fmtIDR = (v?: number | null) =>
   typeof v === "number"
-    ? new Intl.NumberFormat("id-ID", {
-        style: "currency",
-        currency: "IDR",
-        maximumFractionDigits: 0,
-      }).format(v)
+    ? new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(v)
     : "—";
 
 export default function ProgressDetailClient({
@@ -131,20 +122,19 @@ export default function ProgressDetailClient({
   apiBase,
   photoVersionId,
   payments,
+  relTypeOptions,
 }: ProgressDetailClientProps) {
-  const photoUrl = photoVersionId
-    ? `${apiBase}/api/salesforce/files/version/${photoVersionId}/data`
-    : "/default-avatar.png";
+  const photoUrl = photoVersionId ? `${apiBase}/api/salesforce/files/version/${photoVersionId}/data` : "/default-avatar.png";
+
+  // sumber dropdown type (fallback lokal kalau server tidak kirim)
+  const REL_TYPE_OPTIONS: string[] = relTypeOptions && relTypeOptions.length > 0 ? relTypeOptions : ["Father", "Mother", "Son"];
 
   const isOrtuArray = Array.isArray(orangTua);
 
   // Originals
   const originalSiswa = useMemo(() => deepClone(siswa), [siswa]);
   const originalOrtuObj = useMemo<Record<string, unknown>>(
-    () =>
-      isOrtuArray
-        ? {}
-        : deepClone((orangTua && typeof orangTua === "object" ? (orangTua as Record<string, unknown>) : {})),
+    () => (isOrtuArray ? {} : deepClone((orangTua && typeof orangTua === "object") ? (orangTua as Record<string, unknown>) : {})),
     [orangTua, isOrtuArray]
   );
   const originalOrtuArr = useMemo<ParentRel[]>(
@@ -167,8 +157,7 @@ export default function ProgressDetailClient({
 
   // Docs helpers
   const getType = (d: Doc): string => d.Document_Type__c ?? d.Type__c ?? "";
-  const getDocOpenUrl = (d: Doc): string =>
-    d.ContentVersionId ? `/api/salesforce/files/version/${d.ContentVersionId}/data` : d.Document_Link__c ?? d.Url__c ?? "";
+  const getDocOpenUrl = (d: Doc): string => (d.ContentVersionId ? `/api/salesforce/files/version/${d.ContentVersionId}/data` : d.Document_Link__c ?? d.Url__c ?? "");
 
   const docsByType = useMemo(() => {
     const m = new Map<string, Doc>();
@@ -213,13 +202,7 @@ export default function ProgressDetailClient({
           const res = await fetch("/api/salesforce/upload", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              filename: file.name,
-              base64,
-              relateToId: id,
-              accountId: (siswa as { Id?: string }).Id,
-              documentType: type,
-            }),
+            body: JSON.stringify({ filename: file.name, base64, relateToId: id, accountId: (siswa as { Id?: string }).Id, documentType: type }),
           });
           if (!res.ok) throw new Error(await res.text());
           const json: { ok: boolean; downloadUrl?: string } = await res.json();
@@ -231,11 +214,7 @@ export default function ProgressDetailClient({
             setLinkMutable(copy, json.downloadUrl || "");
             nextDocs[idx] = copy;
           } else {
-            nextDocs.push({
-              Name: type,
-              Document_Type__c: type,
-              Document_Link__c: json.downloadUrl,
-            });
+            nextDocs.push({ Name: type, Document_Type__c: type, Document_Link__c: json.downloadUrl });
           }
         }
 
@@ -245,21 +224,16 @@ export default function ProgressDetailClient({
         body.siswa = siswaEdit;
       } else if (segment === "orangTua") {
         if (isOrtuArray) {
-          // Validasi supaya Father/Mother tidak dobel
-          const seen = new Set<RelType>();
+          // pastikan Father/Mother tidak ganda
+          const seen = new Set<string>();
           for (const p of ortuArrEdit) {
-            if (SINGLETON_TYPES.has(p.type as RelType)) {
-              if (seen.has(p.type as RelType)) {
-                await Swal.fire({
-                  icon: "warning",
-                  title: "Tipe dobel",
-                  text: `Tipe "${p.type}" sudah dipakai. Father/Mother hanya boleh satu.`,
-                  confirmButtonText: "OK",
-                });
+            if (SINGLETON_TYPES.has(p.type)) {
+              if (seen.has(p.type)) {
+                await Swal.fire({ icon: "warning", title: "Tipe dobel", text: `Tipe "${p.type}" sudah dipakai. Father/Mother hanya boleh satu.`, confirmButtonText: "OK" });
                 setSavingSegment(null);
                 return;
               }
-              seen.add(p.type as RelType);
+              seen.add(p.type);
             }
           }
           body.orangTua = ortuArrEdit.map(({ locked, ...rest }) => rest);
@@ -298,12 +272,7 @@ export default function ProgressDetailClient({
       await Swal.fire({
         icon: "success",
         title: "Berhasil disimpan",
-        text:
-          segment === "dokumen"
-            ? "Dokumen telah diperbarui."
-            : segment === "siswa"
-            ? "Data siswa telah diperbarui."
-            : "Data orang tua telah diperbarui.",
+        text: segment === "dokumen" ? "Dokumen telah diperbarui." : segment === "siswa" ? "Data siswa telah diperbarui." : "Data orang tua telah diperbarui.",
         confirmButtonText: "OK",
       });
     } catch (err) {
@@ -321,12 +290,11 @@ export default function ProgressDetailClient({
     return false;
   }
   const HIDDEN_KEYS = ["Id", "PhotoUrl", "IsPersonAccount", "PersonContactId", "Master_School__c", "Master_School__r"];
-  const schoolName =
-    (siswaEdit?.["Master_School__r"] as { Name?: string } | undefined)?.Name ??
-    String(siswaEdit?.["Master_School__c"] ?? "");
+  const schoolName = (siswaEdit?.["Master_School__r"] as { Name?: string } | undefined)?.Name ?? String(siswaEdit?.["Master_School__c"] ?? "");
 
   return (
     <>
+      {/* overlay saving */}
       {saving && (
         <ModalPortal>
           <div className="fixed inset-0 z-[200] bg-black/40 backdrop-blur-[1px] flex items-center justify-center">
@@ -350,14 +318,7 @@ export default function ProgressDetailClient({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
               <div className="flex flex-col items-center">
                 <div className="relative overflow-hidden rounded-2xl ring-1 ring-black/5 shadow w-32 md:w-36 aspect-[3/4] bg-white">
-                  <img
-                    src={photoUrl}
-                    alt="Foto Siswa"
-                    className="absolute inset-0 h-full w-full object-cover object-center"
-                    loading="eager"
-                    fetchPriority="high"
-                    decoding="async"
-                  />
+                  <img src={photoUrl} alt="Foto Siswa" className="absolute inset-0 h-full w-full object-cover object-center" loading="eager" fetchPriority="high" decoding="async" />
                 </div>
               </div>
 
@@ -367,12 +328,7 @@ export default function ProgressDetailClient({
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                   <label className="flex flex-col text-sm">
                     <span className="mb-1 text-gray-600">School</span>
-                    <input
-                      className="border rounded px-3 py-2 bg-gray-100 text-gray-600 cursor-not-allowed"
-                      value={schoolName}
-                      readOnly
-                      disabled
-                    />
+                    <input className="border rounded px-3 py-2 bg-gray-100 text-gray-600 cursor-not-allowed" value={schoolName} readOnly disabled />
                   </label>
                 </div>
               </div>
@@ -380,11 +336,7 @@ export default function ProgressDetailClient({
 
             {siswaDirty && (
               <div className="flex justify-end mt-4">
-                <button
-                  className="px-4 py-2 rounded-lg bg-black text-white shadow disabled:opacity-60"
-                  onClick={() => saveSegment("siswa")}
-                  disabled={saving}
-                >
+                <button className="px-4 py-2 rounded-lg bg-black text-white shadow disabled:opacity-60" onClick={() => saveSegment("siswa")} disabled={saving}>
                   {savingSegment === "siswa" ? (
                     <span className="inline-flex items-center gap-2">
                       <Spinner className="h-4 w-4" /> Saving...
@@ -402,19 +354,15 @@ export default function ProgressDetailClient({
             <div className="flex items-center justify-between mb-3">
               <div className="text-base font-medium text-slate-700">data orang tua</div>
 
-              {/* Add button only for array mode */}
               {isOrtuArray && (
                 <button
                   className="text-sm px-3 py-1 rounded-lg bg-gray-900 text-white disabled:opacity-60"
                   disabled={saving}
                   onClick={() => {
-                    const used = new Set(ortuArrEdit.map((p) => p.type).filter(Boolean) as RelType[]);
-                    const order: RelType[] = [...REL_TYPE_OPTIONS];
+                    const used = new Set(ortuArrEdit.map((p) => p.type).filter(Boolean));
+                    const order = [...REL_TYPE_OPTIONS];
                     const firstFree = order.find((t) => !used.has(t)) ?? "";
-                    setOrtuArrEdit((prev) => [
-                      ...prev,
-                      { type: firstFree as RelType, name: "", job: "", phone: "", email: "", address: "", locked: false },
-                    ]);
+                    setOrtuArrEdit((prev) => [...prev, { ...blankParent(), type: firstFree }]);
                   }}
                 >
                   + Add
@@ -422,10 +370,8 @@ export default function ProgressDetailClient({
               )}
             </div>
 
-            {/* Object mode (original) */}
             {!isOrtuArray && renderObjectEditor(ortuObjEdit, setOrtuObjEdit, [], isReadOnly, saving)}
 
-            {/* Array mode (card UI + singleton rules) */}
             {isOrtuArray && (
               <>
                 {ortuArrEdit.length === 0 ? (
@@ -440,11 +386,7 @@ export default function ProgressDetailClient({
                           <div className="flex items-center justify-between mb-3">
                             <div className="text-sm font-medium text-slate-700">Orang Tua #{idx + 1}</div>
                             {!isLocked && (
-                              <button
-                                className="text-xs text-rose-600 underline disabled:opacity-60"
-                                disabled={saving}
-                                onClick={() => setOrtuArrEdit((prev) => prev.filter((_, i) => i !== idx))}
-                              >
+                              <button className="text-xs text-rose-600 underline disabled:opacity-60" disabled={saving} onClick={() => setOrtuArrEdit((prev) => prev.filter((_, i) => i !== idx))}>
                                 Remove
                               </button>
                             )}
@@ -460,7 +402,7 @@ export default function ProgressDetailClient({
                                 onChange={(e) =>
                                   setOrtuArrEdit((prev) => {
                                     const next = [...prev];
-                                    next[idx] = { ...next[idx], type: e.target.value as RelType };
+                                    next[idx] = { ...next[idx], type: e.target.value };
                                     return next;
                                   })
                                 }
@@ -468,7 +410,7 @@ export default function ProgressDetailClient({
                               >
                                 <option value="">-- pilih --</option>
                                 {REL_TYPE_OPTIONS.map((t) => {
-                                  const disabled = typeDisabledInRow(t as RelType, idx, ortuArrEdit);
+                                  const disabled = typeDisabledInRow(t, idx, ortuArrEdit);
                                   return (
                                     <option key={t} value={t} disabled={disabled}>
                                       {t}
@@ -581,11 +523,7 @@ export default function ProgressDetailClient({
 
             {ortuDirty && (
               <div className="flex justify-end mt-4">
-                <button
-                  className="px-4 py-2 rounded-lg bg-black text-white shadow disabled:opacity-60"
-                  onClick={() => saveSegment("orangTua")}
-                  disabled={saving}
-                >
+                <button className="px-4 py-2 rounded-lg bg-black text-white shadow disabled:opacity-60" onClick={() => saveSegment("orangTua")} disabled={saving}>
                   {savingSegment === "orangTua" ? (
                     <span className="inline-flex items-center gap-2">
                       <Spinner className="h-4 w-4" /> Saving...
@@ -598,6 +536,7 @@ export default function ProgressDetailClient({
             )}
           </div>
 
+          {/* Payments */}
           <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
             <div className="text-base font-medium text-slate-700 mb-3">Payment Information</div>
 
@@ -646,18 +585,11 @@ export default function ProgressDetailClient({
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <div className="text-sm font-medium text-slate-700">{type}</div>
-                      <div className={`text-xs mt-1 ${uploaded ? "text-emerald-600" : "text-rose-600"}`}>
-                        {uploaded ? "Uploaded" : "Not Uploaded"}
-                      </div>
+                      <div className={`text-xs mt-1 ${uploaded ? "text-emerald-600" : "text-rose-600"}`}>{uploaded ? "Uploaded" : "Not Uploaded"}</div>
                     </div>
 
                     {uploaded && existing && (
-                      <a
-                        href={getDocOpenUrl(existing)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs underline text-blue-600"
-                      >
+                      <a href={getDocOpenUrl(existing)} target="_blank" rel="noopener noreferrer" className="text-xs underline text-blue-600">
                         Open
                       </a>
                     )}
@@ -687,9 +619,7 @@ export default function ProgressDetailClient({
                       disabled={saving}
                     />
                   </div>
-                  {pendingUploads[type] && (
-                    <div className="text-xs text-gray-600 mt-2 break-words">Selected: {pendingUploads[type]?.name}</div>
-                  )}
+                  {pendingUploads[type] && <div className="text-xs text-gray-600 mt-2 break-words">Selected: {pendingUploads[type]?.name}</div>}
                 </div>
               );
             })}
@@ -740,12 +670,7 @@ function renderObjectEditor(
               <select
                 className={`border rounded px-3 py-2 ${roCls}`}
                 value={String(val)}
-                onChange={(e) =>
-                  setObj({
-                    ...(obj as Record<string, unknown>),
-                    [key]: e.target.value === "true",
-                  })
-                }
+                onChange={(e) => setObj({ ...(obj as Record<string, unknown>), [key]: e.target.value === "true" })}
                 disabled={readOnly || saving}
               >
                 <option value="true">true</option>
@@ -765,12 +690,7 @@ function renderObjectEditor(
               type={inputType}
               className={`border rounded px-3 py-2 ${readOnly ? roCls : ""}`}
               value={String(val ?? "")}
-              onChange={(e) =>
-                setObj({
-                  ...(obj as Record<string, unknown>),
-                  [key]: e.target.value,
-                })
-              }
+              onChange={(e) => setObj({ ...(obj as Record<string, unknown>), [key]: e.target.value })}
               readOnly={(readOnly && !isBirthdate) || saving}
               disabled={(readOnly && !isBirthdate) || saving}
               placeholder={isBirthdate ? "yyyy-mm-dd" : undefined}

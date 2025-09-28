@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 
+
 type ApiDoc = {
   Id: string;
   Name: string;
@@ -24,6 +25,8 @@ type ApiData = {
   dokumen?: ApiDoc[] | null;
   photoVersionId?: string | null;
   payments?: ApiPayment[] | null;
+  /** ⬇️ NEW: picklist dari Salesforce */
+  relTypeOptions?: string[] | null;
 };
 
 type ClientDoc = {
@@ -44,6 +47,8 @@ type ClientProps = {
   cookieHeader: string;
   photoVersionId: string | null;
   payments: ApiPayment[]; // NEW
+  /** ⬇️ NEW: diteruskan ke komponen client */
+  relTypeOptions: string[];
 };
 
 export default async function ProgressDetail({
@@ -80,7 +85,15 @@ export default async function ProgressDetail({
     return <div className="p-6">Error: {json.error || "Unknown error"}</div>;
   }
 
-  const { progress, siswa, orangTua, dokumen, photoVersionId, payments } = json.data;
+  const {
+    progress,
+    siswa,
+    orangTua,
+    dokumen,
+    photoVersionId,
+    payments,
+    relTypeOptions,
+  } = json.data;
 
   return (
     <main className="min-h-screen flex justify-center bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 p-6">
@@ -103,6 +116,8 @@ export default async function ProgressDetail({
           cookieHeader={cookieHeader}
           photoVersionId={photoVersionId ?? null}
           payments={(payments ?? []) as ApiPayment[]}
+          /** ⬇️ NEW: teruskan picklist; kalau API null/undefined pakai array kosong */
+          relTypeOptions={(relTypeOptions ?? []) as string[]}
         />
       </div>
     </main>
