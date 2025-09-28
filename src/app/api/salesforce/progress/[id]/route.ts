@@ -5,7 +5,6 @@ import type { QueryResult, SaveResult } from "jsforce";
 
 /* ===================== Types ===================== */
 
-// ==== TYPES ====
 type Progress = {
   Id: string;
   Name: string;
@@ -20,7 +19,9 @@ type PaymentInfoRow = {
   Payment_Status__c?: string | null;
   Virtual_Account_No__c?: string | null;
   Payment_Channel__c?: string | null;
-  Payment_Channel__r?: { Payment_Channel_Bank__c?: string | null } | null;
+  Payment_Channel__r?: {
+    Payment_Channel_Bank__c?: string | null;
+  } | null;
   Payment_For__c?: string | null;
 };
 
@@ -103,10 +104,22 @@ type PatchBody =
   | { segment: "orangTua"; id: string; orangTua: ParentRel[] }
   | { segment: "activate" };
 
-// ==== UTILS ====
+/* =============== Utils =============== */
+
 function esc(s: string) {
   return s.replace(/'/g, "\\'");
 }
+
+function normalizeBirthdate(input: unknown): string | undefined {
+  const s = String(input ?? "").trim();
+  if (!s) return;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  return s;
+}
+
+/* ===================== GET ===================== */
 
 export async function GET(
   req: Request,
@@ -157,6 +170,7 @@ export async function GET(
 
     if (account) {
       siswaAccount = account;
+
       if (account.IsPersonAccount) {
         const personEmail = (account.PersonEmail || "").toLowerCase();
         if (personEmail && personEmail === userEmail) {
@@ -207,7 +221,7 @@ export async function GET(
     return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
 
-  // 3) Dokumen Account_Document__c
+  // 3) Dokumen (custom object)
   const rawDocs = await sfQuery<DocRow>(`
     SELECT Id, Name, Document_Type__c, Document_Link__c
     FROM Account_Document__c
@@ -216,7 +230,7 @@ export async function GET(
   `);
   console.log(`[${traceId}] account documents count: ${rawDocs.length}`);
 
-  // 4) Perluas pencarian file via CDL pada Opportunity, Account, dan OCR Contacts
+  // 4) File via ContentDocumentLink
   const candidateIds = new Set<string>();
   candidateIds.add(progress.Id);
   if (progress.AccountId) candidateIds.add(progress.AccountId);
@@ -237,8 +251,18 @@ export async function GET(
   }
 
   console.log(`[${traceId}] CDL count (expanded) = ${cdl.length}`);
+  if (cdl.length) {
+    console.log(
+      `[${traceId}] some CDL`,
+      cdl.slice(0, 5).map((r) => ({
+        led: r.LinkedEntityId,
+        title: r.ContentDocument.Title,
+        ver: r.ContentDocument.LatestPublishedVersionId,
+      }))
+    );
+  }
 
-  // ==== Helper: ekstrak ID dari URL (068/069) ====
+  // Helper: ekstrak 068/069 dari URL
   function extractIdsFromUrl(url?: string | null): { verId?: string; docId?: string } {
     if (!url) return {};
     const m068 = url.match(/(?:^|[^\w])(068[0-9A-Za-z]{15,18})/);
@@ -248,19 +272,26 @@ export async function GET(
     return {};
   }
 
-  // ==== index CDL: 069 -> 068 (Latest) + judul ternormalisasi ====
-  const docIdToLatestVer = new Map<string, string>();
+  // Index CDL: 069 -> 068 + normalized title
+  const docIdToLatestVer = new Map<string, string>(); // 069 -> 068
   const normalizedTitleToVer = new Map<string, string>();
-  const normTitle = (s?: string | null) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+  const normTitle = (s?: string | null) =>
+    (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
   for (const r of cdl) {
     const latest = r.ContentDocument.LatestPublishedVersionId;
     const docId = r.ContentDocumentId;
-    if (docId && latest && !docIdToLatestVer.has(docId)) docIdToLatestVer.set(docId, latest);
+    if (docId && latest && !docIdToLatestVer.has(docId)) {
+      docIdToLatestVer.set(docId, latest);
+    }
     const t = normTitle(r.ContentDocument.Title);
-    if (t && latest && !normalizedTitleToVer.has(t)) normalizedTitleToVer.set(t, latest);
+    if (t && latest && !normalizedTitleToVer.has(t)) {
+      normalizedTitleToVer.set(t, latest);
+    }
   }
 
+  // Pre-scan rawDocs: cari 068/069 di URL
   const missing069 = new Set<string>();
   const docIdFromLink: Array<{ idx: number; docId: string }> = [];
   const verIdFromLink: Array<{ idx: number; verId: string }> = [];
@@ -274,6 +305,7 @@ export async function GET(
     }
   });
 
+  // Lengkapi 069 yang belum punya 068 via ContentDocument
   if (missing069.size) {
     const inList = Array.from(missing069).map((s) => `'${esc(s)}'`).join(",");
     const rows = await sfQuery<{ Id: string; LatestPublishedVersionId: string }>(`
@@ -282,50 +314,84 @@ export async function GET(
       WHERE Id IN (${inList})
     `);
     for (const r of rows) {
-      if (r.Id && r.LatestPublishedVersionId) docIdToLatestVer.set(r.Id, r.LatestPublishedVersionId);
+      if (r.Id && r.LatestPublishedVersionId) {
+        docIdToLatestVer.set(r.Id, r.LatestPublishedVersionId);
+      }
     }
   }
 
+  // Bangun dokumen final (pilih ContentVersionId terbaik)
   const docs = rawDocs.map((d, i) => {
     const verDirect = verIdFromLink.find((x) => x.idx === i)?.verId;
     if (verDirect) {
-      return { Id: d.Id, Name: d.Name, Type__c: d.Document_Type__c ?? null, Url__c: d.Document_Link__c ?? null, ContentVersionId: verDirect };
+      return {
+        Id: d.Id,
+        Name: d.Name,
+        Type__c: d.Document_Type__c ?? null,
+        Url__c: d.Document_Link__c ?? null,
+        ContentVersionId: verDirect,
+      };
     }
+
     const docFromUrl = docIdFromLink.find((x) => x.idx === i)?.docId;
     const verFrom069 = docFromUrl ? docIdToLatestVer.get(docFromUrl) ?? null : null;
     if (verFrom069) {
-      return { Id: d.Id, Name: d.Name, Type__c: d.Document_Type__c ?? null, Url__c: d.Document_Link__c ?? null, ContentVersionId: verFrom069 };
+      return {
+        Id: d.Id,
+        Name: d.Name,
+        Type__c: d.Document_Type__c ?? null,
+        Url__c: d.Document_Link__c ?? null,
+        ContentVersionId: verFrom069,
+      };
     }
+
     const key = normTitle(d.Name);
     const verFromTitle = key ? normalizedTitleToVer.get(key) ?? null : null;
-    return { Id: d.Id, Name: d.Name, Type__c: d.Document_Type__c ?? null, Url__c: d.Document_Link__c ?? null, ContentVersionId: verFromTitle };
+
+    return {
+      Id: d.Id,
+      Name: d.Name,
+      Type__c: d.Document_Type__c ?? null,
+      Url__c: d.Document_Link__c ?? null,
+      ContentVersionId: verFromTitle,
+    };
   });
 
-  // Foto
-  const photo = cdl.find((x) => (x.ContentDocument.Title || "").toLowerCase().includes("pas foto")) || cdl[0];
+  // Pilih foto
+  const photo =
+    cdl.find((x) => (x.ContentDocument.Title || "").toLowerCase().includes("pas foto")) || cdl[0];
   let photoVersionId: string | null = photo?.ContentDocument.LatestPublishedVersionId || null;
+
   if (!photoVersionId && cdl.length) {
     const docIds = cdl.map((r) => `'${esc(r.ContentDocumentId)}'`).join(",");
     const versions = await sfQuery<VersionRow>(`
       SELECT Id, ContentDocumentId, IsLatest
       FROM ContentVersion
-      WHERE ContentDocumentId IN (${docIds}) AND IsLatest = true
+      WHERE ContentDocumentId IN (${docIds})
+        AND IsLatest = true
       ORDER BY Id DESC
       LIMIT 1
     `);
     photoVersionId = versions[0]?.Id ?? null;
   }
 
+  // Payments
   const qPayments = `
-    SELECT Id, Name, Amount__c, Payment_Status__c, Virtual_Account_No__c,
-           Payment_Channel__c, Payment_Channel__r.Payment_Channel_Bank__c, Payment_For__c
+    SELECT
+      Id, Name,
+      Amount__c,
+      Payment_Status__c,
+      Virtual_Account_No__c,
+      Payment_Channel__c,
+      Payment_Channel__r.Payment_Channel_Bank__c,
+      Payment_For__c
     FROM Payment_Information__c
     WHERE Application_Progress__c = '${id}'
     ORDER BY CreatedDate ASC
   `;
   const payments = await sfQuery<PaymentInfoRow>(qPayments);
 
-  // 5) Orang Tua
+  // 5) Orang Tua (Relationships untuk applicant ini)
   let orangTua: ParentRel[] = [];
   if (progress.AccountId) {
     const accIdSafe = progress.AccountId.replace(/'/g, "\\'");
@@ -350,22 +416,47 @@ export async function GET(
     }));
   }
 
-  // 6) Picklist Type__c (ACTIVE)
+  // 6) Picklist Type__c (ACTIVE) — TANPA any
+  type PicklistValue = { active?: boolean; value?: string | null };
+  type SObjectField = { name?: string | null; picklistValues?: PicklistValue[] | null };
+  type SObjectDescribe = { fields?: SObjectField[] | null };
+
+  const isPicklistValue = (v: unknown): v is PicklistValue =>
+    typeof v === "object" && v !== null && ("active" in (v as object) || "value" in (v as object));
+  const isField = (f: unknown): f is SObjectField => {
+    if (typeof f !== "object" || f === null) return false;
+    const nameOk =
+      !("name" in f) ||
+      typeof (f as { name?: unknown }).name === "string" ||
+      (f as { name?: unknown }).name == null;
+    const pv = (f as { picklistValues?: unknown }).picklistValues;
+    const pvOk = pv == null || (Array.isArray(pv) && pv.every(isPicklistValue));
+    return nameOk && pvOk;
+  };
+  const isDescribe = (d: unknown): d is SObjectDescribe =>
+    typeof d === "object" && d !== null && (!("fields" in d) || Array.isArray((d as { fields?: unknown }).fields));
+
   let relTypeOptions: string[] = [];
   try {
     const conn = await getConn();
-    const desc: any = await conn.sobject("Relationship__c").describe();
-    const typeField: any = Array.isArray(desc?.fields) ? desc.fields.find((f: any) => f?.name === "Type__c") : null;
-    const values: string[] = Array.isArray(typeField?.picklistValues)
-      ? typeField.picklistValues
-          .filter((p: any) => p?.active)
-          .map((p: any) => p?.value)
-          .filter((v: any): v is string => typeof v === "string" && v.length > 0)
+    const rawDesc: unknown = await conn.sobject("Relationship__c").describe();
+    const desc: SObjectDescribe = isDescribe(rawDesc) ? rawDesc : { fields: [] };
+    const fields = Array.isArray(desc.fields) ? desc.fields.filter(isField) : [];
+    const typeField = fields.find((f) => (f.name ?? "") === "Type__c");
+
+    relTypeOptions = Array.isArray(typeField?.picklistValues)
+      ? typeField!.picklistValues
+          .filter((p): p is PicklistValue => isPicklistValue(p) && (p.active ?? false))
+          .map((p) => (typeof p.value === "string" ? p.value.trim() : ""))
+          .filter((v): v is string => v.length > 0)
       : [];
-    console.log(`[${traceId}] relTypeOptions from SF:`, values);
-    relTypeOptions = values;
+    console.log(`[${traceId}] relTypeOptions from SF:`, relTypeOptions);
   } catch (e) {
     console.log(`[${traceId}] describe Relationship__c failed`, e);
+  }
+  if (relTypeOptions.length === 0) {
+    // fallback agar UI tetap hidup
+    relTypeOptions = ["Father", "Mother"];
   }
 
   const debugPayload = debug
@@ -395,23 +486,12 @@ export async function GET(
       siswa: siswaAccount,
       orangTua,
       dokumen: docs,
-      photoVersionId,
+      photoVersionId, // untuk <img src="/api/salesforce/files/version/{id}/data">
       payments,
-      relTypeOptions, // <<<<<<<<<< send to client
+      relTypeOptions, // <<<<<< kirim ke client
       ...debugPayload,
     },
   });
-}
-
-/* ===================== Helpers ===================== */
-
-function normalizeBirthdate(input: unknown): string | undefined {
-  const s = String(input ?? "").trim();
-  if (!s) return;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-  return s;
 }
 
 /* ===================== PATCH ===================== */
@@ -429,6 +509,7 @@ export async function PATCH(
   const { id: rawId } = await ctx.params;
   const id = String(rawId);
 
+  // Auth
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData?.user?.id) {
@@ -442,7 +523,9 @@ export async function PATCH(
     case "activate": {
       try {
         const cur = (await conn.sobject("Opportunity").retrieve(id)) as OpportunityRecord;
-        if (!cur?.Id) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+        if (!cur?.Id) {
+          return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+        }
 
         if (!cur.Is_Active__c && cur.StageName !== "Closed Lost") {
           const upd = await conn.sobject("Opportunity").update({ Id: id, Is_Active__c: true });
@@ -451,7 +534,12 @@ export async function PATCH(
           }
         }
         const q = (await conn.sobject("Opportunity").retrieve(id)) as OpportunityRecord;
-        const opp = { Id: String(q.Id), StageName: q.StageName ?? null, Web_Stage__c: q.Web_Stage__c ?? null, Is_Active__c: !!q.Is_Active__c };
+        const opp = {
+          Id: String(q.Id),
+          StageName: q.StageName ?? null,
+          Web_Stage__c: q.Web_Stage__c ?? null,
+          Is_Active__c: !!q.Is_Active__c,
+        };
         return NextResponse.json({ ok: true, opp });
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : "internal_error";
@@ -463,9 +551,15 @@ export async function PATCH(
       const docs = Array.isArray((body as Extract<PatchBody, { segment: "dokumen" }>).dokumen)
         ? (body as Extract<PatchBody, { segment: "dokumen" }>).dokumen
         : null;
-      if (!docs) return NextResponse.json({ ok: false, error: "invalid_payload_dokumen" }, { status: 400 });
+      if (!docs) {
+        return NextResponse.json({ ok: false, error: "invalid_payload_dokumen" }, { status: 400 });
+      }
 
-      const types = Array.from(new Set(docs.map((d) => (d.Type__c ?? "").trim()).filter((t): t is string => t.length > 0)));
+      const types = Array.from(
+        new Set(
+          docs.map((d) => (d.Type__c ?? "").trim()).filter((t): t is string => t.length > 0)
+        )
+      );
 
       const existingByType = new Map<string, { Id: string }>();
       if (types.length) {
@@ -476,12 +570,26 @@ export async function PATCH(
            WHERE Application_Progress__c='${esc(id)}' AND Document_Type__c IN (${inList})`
         );
         for (const r of qRes.records) {
-          if (r.Document_Type__c) existingByType.set(r.Document_Type__c, { Id: r.Id });
+          if (r.Document_Type__c) {
+            existingByType.set(r.Document_Type__c, { Id: r.Id });
+          }
         }
       }
 
-      const toInsert: Array<{ Name: string; Application_Progress__c: string; Document_Type__c: string; Document_Link__c: string }> = [];
-      const toUpdate: Array<{ Id: string; Name: string; Application_Progress__c: string; Document_Type__c: string; Document_Link__c: string }> = [];
+      const toInsert: Array<{
+        Name: string;
+        Application_Progress__c: string;
+        Document_Type__c: string;
+        Document_Link__c: string;
+      }> = [];
+
+      const toUpdate: Array<{
+        Id: string;
+        Name: string;
+        Application_Progress__c: string;
+        Document_Type__c: string;
+        Document_Link__c: string;
+      }> = [];
 
       for (const d of docs) {
         const type = (d.Type__c ?? "").trim();
@@ -490,11 +598,19 @@ export async function PATCH(
         const link = (d.Url__c ?? "").trim();
         const name = d.Name?.trim() || type || "Document";
 
-        const base = { Name: name, Application_Progress__c: id, Document_Type__c: type, Document_Link__c: link };
+        const base = {
+          Name: name,
+          Application_Progress__c: id,
+          Document_Type__c: type,
+          Document_Link__c: link,
+        };
 
         const existing = d.Id ? { Id: d.Id } : existingByType.get(type);
-        if (existing?.Id) toUpdate.push({ Id: existing.Id, ...base });
-        else toInsert.push(base);
+        if (existing?.Id) {
+          toUpdate.push({ Id: existing.Id, ...base });
+        } else {
+          toInsert.push(base);
+        }
       }
 
       if (toUpdate.length) await conn.sobject("Account_Document__c").update(toUpdate);
@@ -505,9 +621,14 @@ export async function PATCH(
 
     case "siswa": {
       try {
-        const opp = (await conn.sobject("Opportunity").retrieve(id)) as { Id?: string; AccountId?: string | null };
+        const opp = (await conn.sobject("Opportunity").retrieve(id)) as {
+          Id?: string;
+          AccountId?: string | null;
+        };
         const accountId = opp?.AccountId || null;
-        if (!accountId) return NextResponse.json({ ok: false, error: "no_account_on_opportunity" }, { status: 400 });
+        if (!accountId) {
+          return NextResponse.json({ ok: false, error: "no_account_on_opportunity" }, { status: 400 });
+        }
 
         const src = (body as Extract<PatchBody, { segment: "siswa" }>).siswa || {};
         const updateBody: AccountUpdatePayload = { Id: accountId };
@@ -520,7 +641,9 @@ export async function PATCH(
         }
 
         const updRes: SaveResult = await conn.sobject("Account").update(updateBody);
-        if (!updRes.success) return NextResponse.json({ ok: false, error: "sf_update_failed" }, { status: 500 });
+        if (!updRes.success) {
+          return NextResponse.json({ ok: false, error: "sf_update_failed" }, { status: 500 });
+        }
 
         return NextResponse.json({ ok: true });
       } catch (err: unknown) {
@@ -531,38 +654,67 @@ export async function PATCH(
 
     case "orangTua": {
       try {
-        const opp = (await conn.sobject("Opportunity").retrieve(id)) as { Id?: string; AccountId?: string | null };
+        const opp = (await conn.sobject("Opportunity").retrieve(id)) as {
+          Id?: string;
+          AccountId?: string | null;
+        };
         const accountId = opp?.AccountId || null;
-        if (!accountId) return NextResponse.json({ ok: false, error: "no_account_on_opportunity" }, { status: 400 });
+        if (!accountId) {
+          return NextResponse.json({ ok: false, error: "no_account_on_opportunity" }, { status: 400 });
+        }
 
-        const acc = (await conn.sobject("Account").retrieve(accountId)) as { Id?: string; PersonContactId?: string | null };
+        const acc = (await conn.sobject("Account").retrieve(accountId)) as {
+          Id?: string;
+          PersonContactId?: string | null;
+        };
         const studentContactId = acc?.PersonContactId || null;
 
         const items = (body as Extract<PatchBody, { segment: "orangTua" }>).orangTua;
-        if (!Array.isArray(items)) return NextResponse.json({ ok: false, error: "invalid_payload_orangTua" }, { status: 400 });
+        if (!Array.isArray(items)) {
+          return NextResponse.json({ ok: false, error: "invalid_payload_orangTua" }, { status: 400 });
+        }
 
         for (const p of items) {
           const type = (p.type || "").trim();
           const name = (p.name || "").trim();
           if (!type || !name) continue;
 
-          // Upsert Contact
+          // Upsert Contact (orang tua)
           let contactId = p.contactId || null;
-          const contactPayload: { Id?: string; LastName: string; Job__c?: string | null; Phone?: string | null; Email?: string | null; Address__c?: string | null } =
-            { LastName: name, Job__c: (p.job || "").trim() || null, Phone: (p.phone || "").trim() || null, Email: (p.email || "").trim() || null, Address__c: (p.address || "").trim() || null };
+          const contactPayload: {
+            Id?: string;
+            LastName: string;
+            Job__c?: string | null;
+            Phone?: string | null;
+            Email?: string | null;
+            Address__c?: string | null;
+          } = {
+            LastName: name,
+            Job__c: (p.job || "").trim() || null,
+            Phone: (p.phone || "").trim() || null,
+            Email: (p.email || "").trim() || null,
+            Address__c: (p.address || "").trim() || null,
+          };
 
           if (contactId) {
             await conn.sobject("Contact").update({ Id: contactId, ...contactPayload });
           } else {
             const ins = await conn.sobject("Contact").insert(contactPayload);
-            if (!ins.success) return NextResponse.json({ ok: false, error: "contact_insert_failed" }, { status: 500 });
+            if (!ins.success) {
+              return NextResponse.json({ ok: false, error: "contact_insert_failed" }, { status: 500 });
+            }
             contactId = ins.id as string;
           }
 
           // Upsert Relationship__c
-          const relBase: { Id?: string; Type__c: string; Contact__c: string; Related_Contact__c?: string } = {
+          const relBase: {
+            Id?: string;
+            Type__c: string;
+            Contact__c: string;
+            Related_Contact__c?: string;
+          } = {
             Type__c: type,
-            Contact__c: contactId!,
+            Contact__c: contactId,
             ...(studentContactId ? { Related_Contact__c: studentContactId } : {}),
           };
 
@@ -570,7 +722,9 @@ export async function PATCH(
             await conn.sobject("Relationship__c").update({ Id: p.relationshipId, ...relBase });
           } else {
             const r = await conn.sobject("Relationship__c").insert(relBase);
-            if (!r.success) return NextResponse.json({ ok: false, error: "relationship_insert_failed" }, { status: 500 });
+            if (!r.success) {
+              return NextResponse.json({ ok: false, error: "relationship_insert_failed" }, { status: 500 });
+            }
           }
         }
 
