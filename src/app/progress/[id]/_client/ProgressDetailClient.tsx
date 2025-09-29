@@ -735,6 +735,24 @@ export default function ProgressDetailClient({
         <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40 p-6">
           <div className="text-lg font-semibold text-slate-700 mb-4">data application progres</div>
 
+          {docsDirty && (
+            <div className="flex justify-end mt-4 mb-4">
+              <button
+                className="px-4 py-2 rounded-lg bg-black text-white shadow disabled:opacity-60"
+                onClick={() => saveSegment("dokumen")}
+                disabled={saving}
+              >
+                {savingSegment === "dokumen" ? (
+                  <span className="inline-flex items-center gap-2">
+                    <Spinner className="h-4 w-4" /> Saving...
+                  </span>
+                ) : (
+                  "save"
+                )}
+              </button>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {REQUIRED_TYPES.map((type) => {
               const existing = docsByType.get(type);
@@ -779,17 +797,35 @@ export default function ProgressDetailClient({
                   </div>
 
                   <div className="flex items-center justify-between gap-3">
-                    <label className="text-xs text-gray-600">Upload File</label>
-                    <input
-                      type="file"
-                      className="block w-full text-xs disabled:opacity-60"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0] || null;
-                        onPickFile(type as RequiredType, f);
-                        ensureDocEntryFor(type as RequiredType);
-                      }}
-                      disabled={saving}
-                    />
+                    <span className="text-xs text-gray-600">Upload File</span>
+
+                    {/* make a stable, unique id per type */}
+                    {(() => {
+                      const idSafe = `file-${type.toLowerCase().replace(/\s+/g, "-")}`;
+
+                      return (
+                        <>
+                          <input
+                            id={idSafe}
+                            type="file"
+                            className="sr-only"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0] || null;
+                              onPickFile(type as RequiredType, f);
+                              ensureDocEntryFor(type as RequiredType);
+                            }}
+                            disabled={saving}
+                          />
+
+                          <label
+                            htmlFor={idSafe}
+                            className="inline-flex items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm bg-white hover:bg-gray-50 active:bg-gray-100 disabled:opacity-60 cursor-pointer"
+                          >
+                            {pendingUploads[type]?.name ? "Change File" : "Choose File"}
+                          </label>
+                        </>
+                      );
+                    })()}
                   </div>
 
                   {pendingUploads[type] && (
@@ -801,24 +837,6 @@ export default function ProgressDetailClient({
               );
             })}
           </div>
-
-          {docsDirty && (
-            <div className="flex justify-end mt-4">
-              <button
-                className="px-4 py-2 rounded-lg bg-black text-white shadow disabled:opacity-60"
-                onClick={() => saveSegment("dokumen")}
-                disabled={saving}
-              >
-                {savingSegment === "dokumen" ? (
-                  <span className="inline-flex items-center gap-2">
-                    <Spinner className="h-4 w-4" /> Saving...
-                  </span>
-                ) : (
-                  "save"
-                )}
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </>
