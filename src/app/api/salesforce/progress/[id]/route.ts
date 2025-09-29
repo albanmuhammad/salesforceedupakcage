@@ -446,9 +446,9 @@ export async function GET(
 
     relTypeOptions = Array.isArray(typeField?.picklistValues)
       ? typeField!.picklistValues
-          .filter((p): p is PicklistValue => isPicklistValue(p) && (p.active ?? false))
-          .map((p) => (typeof p.value === "string" ? p.value.trim() : ""))
-          .filter((v): v is string => v.length > 0)
+        .filter((p): p is PicklistValue => isPicklistValue(p) && (p.active ?? false))
+        .map((p) => (typeof p.value === "string" ? p.value.trim() : ""))
+        .filter((v): v is string => v.length > 0)
       : [];
     console.log(`[${traceId}] relTypeOptions from SF:`, relTypeOptions);
   } catch (e) {
@@ -461,22 +461,22 @@ export async function GET(
 
   const debugPayload = debug
     ? {
-        debug: {
-          linkedEntityIds: idList,
-          cdl: cdl.map((r) => ({
-            linkedTo: r.LinkedEntityId,
-            docId: r.ContentDocumentId,
-            title: r.ContentDocument.Title,
-            versionId: r.ContentDocument.LatestPublishedVersionId,
-          })),
-          documents: docs.map((d) => ({
-            id: d.Id,
-            name: d.Name,
-            originalUrl: d.Url__c,
-            contentVersionId: d.ContentVersionId,
-          })),
-        },
-      }
+      debug: {
+        linkedEntityIds: idList,
+        cdl: cdl.map((r) => ({
+          linkedTo: r.LinkedEntityId,
+          docId: r.ContentDocumentId,
+          title: r.ContentDocument.Title,
+          versionId: r.ContentDocument.LatestPublishedVersionId,
+        })),
+        documents: docs.map((d) => ({
+          id: d.Id,
+          name: d.Name,
+          originalUrl: d.Url__c,
+          contentVersionId: d.ContentVersionId,
+        })),
+      },
+    }
     : undefined;
 
   return NextResponse.json({
@@ -654,13 +654,17 @@ export async function PATCH(
 
     case "orangTua": {
       try {
+        // --- Ambil Account & PersonContactId (003…) ---
         const opp = (await conn.sobject("Opportunity").retrieve(id)) as {
           Id?: string;
           AccountId?: string | null;
         };
         const accountId = opp?.AccountId || null;
         if (!accountId) {
-          return NextResponse.json({ ok: false, error: "no_account_on_opportunity" }, { status: 400 });
+          return NextResponse.json(
+            { ok: false, error: "no_account_on_opportunity" },
+            { status: 400 }
+          );
         }
 
         const acc = (await conn.sobject("Account").retrieve(accountId)) as {
@@ -671,7 +675,36 @@ export async function PATCH(
 
         const items = (body as Extract<PatchBody, { segment: "orangTua" }>).orangTua;
         if (!Array.isArray(items)) {
-          return NextResponse.json({ ok: false, error: "invalid_payload_orangTua" }, { status: 400 });
+          return NextResponse.json(
+            { ok: false, error: "invalid_payload_orangTua" },
+            { status: 400 }
+          );
+        }
+
+        // --- Helper normalisasi phone sederhana ---
+        const normalizePhone = (raw?: string | null) =>
+          (raw || "").replace(/[^\d+]/g, "").replace(/^0/, "+62");
+
+        // --- Cari contact existing by email/phone (tanpa LOWER di WHERE) ---
+        async function findExistingContact(email?: string | null, phone?: string | null) {
+          const e = (email || "").trim();            // jangan pakai LOWER()
+          const p = normalizePhone(phone);
+          if (!e && !p) return null;
+
+          const where: string[] = [];
+          if (e) where.push(`Email = '${esc(e)}'`);
+          if (p) where.push(`Phone = '${esc(p)}'`);
+
+          // Bungkus OR dengan (), lalu LIMIT 1
+          const q = `
+    SELECT Id, LastName, Email, Phone
+    FROM Contact
+    WHERE (${where.join(" OR ")})
+    ORDER BY LastModifiedDate DESC
+    LIMIT 1
+  `;
+          const rows = await sfQuery<{ Id: string }>(q);
+          return rows[0] ?? null;
         }
 
         for (const p of items) {
@@ -679,8 +712,17 @@ export async function PATCH(
           const name = (p.name || "").trim();
           if (!type || !name) continue;
 
-          // Upsert Contact (orang tua)
+          // --- Upsert Contact (orang tua) ---
           let contactId = p.contactId || null;
+
+          // Coba reuse dulu jika tidak ada Id:
+          if (!contactId) {
+            const hit = await findExistingContact(p.email, p.phone);
+            if (hit?.Id) {
+              contactId = hit.Id;
+            }
+          }
+
           const contactPayload: {
             Id?: string;
             LastName: string;
@@ -691,22 +733,26 @@ export async function PATCH(
           } = {
             LastName: name,
             Job__c: (p.job || "").trim() || null,
-            Phone: (p.phone || "").trim() || null,
+            Phone: normalizePhone(p.phone),
             Email: (p.email || "").trim() || null,
             Address__c: (p.address || "").trim() || null,
           };
 
           if (contactId) {
+            // Update ringan (jangan kosongkan kalau payload kosong)
             await conn.sobject("Contact").update({ Id: contactId, ...contactPayload });
           } else {
             const ins = await conn.sobject("Contact").insert(contactPayload);
             if (!ins.success) {
-              return NextResponse.json({ ok: false, error: "contact_insert_failed" }, { status: 500 });
+              return NextResponse.json(
+                { ok: false, error: "contact_insert_failed" },
+                { status: 500 }
+              );
             }
             contactId = ins.id as string;
           }
 
-          // Upsert Relationship__c
+          // --- Upsert Relationship__c ---
           const relBase: {
             Id?: string;
             Type__c: string;
@@ -723,7 +769,10 @@ export async function PATCH(
           } else {
             const r = await conn.sobject("Relationship__c").insert(relBase);
             if (!r.success) {
-              return NextResponse.json({ ok: false, error: "relationship_insert_failed" }, { status: 500 });
+              return NextResponse.json(
+                { ok: false, error: "relationship_insert_failed" },
+                { status: 500 }
+              );
             }
           }
         }
@@ -734,6 +783,7 @@ export async function PATCH(
         return NextResponse.json({ ok: false, error: msg }, { status: 500 });
       }
     }
+
 
     default:
       return NextResponse.json({ ok: false, error: "unsupported segment" }, { status: 400 });
