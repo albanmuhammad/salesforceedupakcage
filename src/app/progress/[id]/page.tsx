@@ -23,7 +23,8 @@ type ApiData = {
   siswa: Record<string, unknown>;
   orangTua?: Record<string, unknown> | null;
   dokumen?: ApiDoc[] | null;
-  photoVersionId?: string | null;
+  pasFotoVersionId?: string | null;
+  testCardVersionId?: string | null;
   payments?: ApiPayment[] | null;
   /** ⬇️ NEW: picklist dari Salesforce */
   relTypeOptions?: string[] | null;
@@ -46,7 +47,8 @@ type ClientProps = {
   dokumen: ClientDoc[];
   apiBase: string;
   cookieHeader: string;
-  photoVersionId: string | null;
+  pasFotoVersionId: string | null;
+  testCardVersionId: string | null;
   payments: ApiPayment[]; // NEW
   /** ⬇️ NEW: diteruskan ke komponen client */
   relTypeOptions: string[];
@@ -91,7 +93,8 @@ export default async function ProgressDetail({
     siswa,
     orangTua,
     dokumen,
-    photoVersionId,
+    pasFotoVersionId,
+    testCardVersionId,
     payments,
     relTypeOptions,
   } = json.data;
@@ -113,7 +116,8 @@ export default async function ProgressDetail({
           dokumen={(dokumen ?? []) as ClientDoc[]}
           apiBase={base}
           cookieHeader={cookieHeader}
-          photoVersionId={photoVersionId ?? null}
+          pasFotoVersionId={pasFotoVersionId ?? null}
+          testCardVersionId={testCardVersionId ?? null}
           payments={(payments ?? []) as ApiPayment[]}
           /** ⬇️ NEW: teruskan picklist; kalau API null/undefined pakai array kosong */
           relTypeOptions={(relTypeOptions ?? []) as string[]}

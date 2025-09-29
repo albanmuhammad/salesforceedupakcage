@@ -385,25 +385,44 @@ export async function GET(
     };
   });
 
-  // Pilih foto
-  const photo =
+  // cari Pas Foto
+  const pasFoto =
     cdl.find((x) =>
       (x.ContentDocument.Title || "").toLowerCase().includes("pas foto")
-    ) || cdl[0];
-  let photoVersionId: string | null =
-    photo?.ContentDocument.LatestPublishedVersionId || null;
+    ) || null;
 
-  if (!photoVersionId && cdl.length) {
+  // cari Test Card
+  const testCard =
+    cdl.find((x) =>
+      (x.ContentDocument.Title || "").toLowerCase().includes("testcard")
+    ) || null;
+
+  let pasFotoVersionId: string | null =
+    pasFoto?.ContentDocument.LatestPublishedVersionId || null;
+  let testCardVersionId: string | null =
+    testCard?.ContentDocument.LatestPublishedVersionId || null;
+
+  // fallback kalau LatestPublishedVersionId kosong
+  if ((!pasFotoVersionId || !testCardVersionId) && cdl.length) {
     const docIds = cdl.map((r) => `'${esc(r.ContentDocumentId)}'`).join(",");
     const versions = await sfQuery<VersionRow>(`
-      SELECT Id, ContentDocumentId, IsLatest
-      FROM ContentVersion
-      WHERE ContentDocumentId IN (${docIds})
-        AND IsLatest = true
-      ORDER BY Id DESC
-      LIMIT 1
-    `);
-    photoVersionId = versions[0]?.Id ?? null;
+    SELECT Id, ContentDocumentId, IsLatest
+    FROM ContentVersion
+    WHERE ContentDocumentId IN (${docIds})
+      AND IsLatest = true
+    ORDER BY Id DESC
+  `);
+
+    if (!pasFotoVersionId && pasFoto) {
+      pasFotoVersionId =
+        versions.find((v) => v.ContentDocumentId === pasFoto.ContentDocumentId)
+          ?.Id ?? null;
+    }
+    if (!testCardVersionId && testCard) {
+      testCardVersionId =
+        versions.find((v) => v.ContentDocumentId === testCard.ContentDocumentId)
+          ?.Id ?? null;
+    }
   }
 
   // Payments
@@ -530,7 +549,8 @@ export async function GET(
       siswa: siswaAccount,
       orangTua,
       dokumen: docs,
-      photoVersionId, // untuk <img src="/api/salesforce/files/version/{id}/data">
+      pasFotoVersionId, // untuk <img src="/api/salesforce/files/version/{id}/data">
+      testCardVersionId,
       payments,
       relTypeOptions, // <<<<<< kirim ke client
       ...debugPayload,
@@ -702,6 +722,7 @@ export async function PATCH(
       }
 
       if (toUpdate.length) {
+        console.log("toupdate", toUpdate);
         const res = await conn.sobject("Account_Document__c").update(toUpdate);
         const failed = (
           res as Array<{ success: boolean; errors?: unknown[] }>

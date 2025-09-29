@@ -80,7 +80,8 @@ type ProgressDetailClientProps = {
   orangTua: Record<string, unknown> | ParentRel[];
   dokumen: Doc[];
   apiBase: string;
-  photoVersionId: string | null;
+  pasFotoVersionId: string | null;
+  testCardVersionId: string | null;
   payments: PaymentInfo[];
   relTypeOptions?: string[]; // dari server (describe picklist)
 };
@@ -133,11 +134,28 @@ export default function ProgressDetailClient({
   orangTua,
   dokumen,
   apiBase,
-  photoVersionId,
+  pasFotoVersionId,
+  testCardVersionId,
   payments,
   relTypeOptions,
 }: ProgressDetailClientProps) {
-  const photoUrl = photoVersionId ? `${apiBase}/api/salesforce/files/version/${photoVersionId}/data` : "/default-avatar.png";
+  const photoUrl = pasFotoVersionId ? `${apiBase}/api/salesforce/files/version/${pasFotoVersionId}/data` : "/default-avatar.png";
+  const testCardUrlBase =
+    testCardVersionId
+      ? `${apiBase}/api/salesforce/files/version/${testCardVersionId}/data`
+      : null;
+
+  // force inline for preview; add a tiny cache-buster so newly uploaded versions show up immediately
+  const testCardPreviewUrl = testCardUrlBase
+    ? `${testCardUrlBase}?disposition=inline&v=${encodeURIComponent(testCardVersionId ?? "")}#view=FitH`
+    : null;
+
+  console.log('testCardPreviewUrl', testCardPreviewUrl);
+
+  const testCardDownloadUrl = testCardUrlBase
+    ? `${testCardUrlBase}?disposition=attachment`
+    : null;
+  console.log('pasFotoVersionId', pasFotoVersionId);
 
   // Sumber dropdown Type__c (fallback lokal kalau server kosong)
   const REL_TYPE_OPTIONS: string[] =
@@ -281,11 +299,16 @@ export default function ProgressDetailClient({
           // Reflect the server changes locally:
           // - mark as uploaded (set link)
           // - store Account_Document__c Id (so subsequent PATCH can target it)
-          const openUrl = j.contentVersionId
-            ? `/lightning/r/ContentVersion/${j.contentVersionId}/view`  // ← Versi terbaru
-            : j.contentDocumentId
-              ? `/lightning/r/ContentDocument/${j.contentDocumentId}/view`
-              : "";
+
+          // const openUrl = j.contentVersionId
+          //   ? `/lightning/r/ContentVersion/${j.contentVersionId}/view`  // ← Versi terbaru
+          //   : j.contentDocumentId
+          //     ? `/lightning/r/ContentDocument/${j.contentDocumentId}/view`
+          //     : "";
+
+          const openUrl = `/lightning/r/ContentDocument/${j.contentDocumentId}/view`;
+
+
           const idx = nextDocs.findIndex((d) => getType(d) === type);
           if (idx >= 0) {
             const copy = { ...nextDocs[idx] };
@@ -750,6 +773,52 @@ export default function ProgressDetailClient({
                   "save"
                 )}
               </button>
+            </div>
+          )}
+
+          {testCardPreviewUrl && (
+            <div className="mt-4 mb-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between px-4 py-3">
+                <div className="text-sm font-medium text-slate-700">Test Card (PDF)</div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={testCardPreviewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm hover:bg-slate-800"
+                  >
+                    Open
+                  </a>
+                  <a
+                    href={testCardDownloadUrl!}
+                    className="px-3 py-1.5 rounded-lg bg-gray-100 text-slate-700 text-sm hover:bg-gray-200"
+                  >
+                    Download
+                  </a>
+                </div>
+              </div>
+
+              {/* PDF canvas */}
+              <div className="px-4 pb-4">
+                <div className="rounded-xl overflow-hidden border border-gray-100">
+                  {/* Primary (better for Safari/iOS) */}
+                  <object
+                    data={testCardPreviewUrl}
+                    type="application/pdf"
+                    className="w-full h-[120px]"
+                  >
+                    {/* Fallback */}
+                    <iframe
+                      src={testCardPreviewUrl}
+                      title="Test Card PDF Preview"
+                      className="w-full h-[120px]"
+                    />
+                  </object>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  If the preview doesn’t load, click <a href={testCardPreviewUrl} target="_blank" rel="noopener noreferrer" className="underline">Open</a>.
+                </p>
+              </div>
             </div>
           )}
 

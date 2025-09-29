@@ -153,9 +153,7 @@ export async function POST(req: Request) {
 `);
 
     const latestVersionId = latestCvQuery.records?.[0]?.Id;
-    const documentLink = latestVersionId
-      ? `/lightning/r/ContentVersion/${latestVersionId}/view` // ← Pakai ContentVersion
-      : `/lightning/r/ContentDocument/${contentDocumentId}/view`; // fallback
+    const documentLink = `/lightning/r/ContentDocument/${contentDocumentId}/view`; // fallback
 
     await conn.sobject("Account_Document__c").update({
       Id: docRecId,
