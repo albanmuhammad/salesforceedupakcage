@@ -110,12 +110,29 @@ export async function GET(
     // Forward stream/binary
     const ab = await resp.arrayBuffer();
 
-    // Tentukan inline vs attachment:
-    // - pakai "inline" kalau mau bisa dirender di <img> atau <iframe>
-    // - pakai "attachment" kalau ingin force download dengan nama yang benar
-    const disposition = /^(image|video)\//.test(contentType)
-      ? "inline"
-      : "attachment";
+    // ==== ⬇️ BAGIAN YANG DIUBAH: izinkan preview PDF + override via query param
+    const url = new URL(_req.url);
+    const forcedDisposition = url.searchParams.get("disposition"); // "inline" | "attachment" | null
+
+    // Tipe yang aman untuk inline preview di browser/tab/iframe
+    const inlineTypes = [
+      /^image\//,
+      /^video\//,
+      /^text\//,
+      /^application\/pdf$/,
+    ];
+
+    const isInlinePreviewable = inlineTypes.some((re) => re.test(contentType));
+
+    const disposition =
+      forcedDisposition === "inline"
+        ? "inline"
+        : forcedDisposition === "attachment"
+        ? "attachment"
+        : isInlinePreviewable
+        ? "inline"
+        : "attachment";
+    // ==== ⬆️ END
 
     return new NextResponse(Buffer.from(ab), {
       status: 200,

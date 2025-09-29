@@ -37,6 +37,7 @@ type ClientDoc = {
 
 type ClientProps = {
   id: string;
+  progressName: string;
   siswa: Record<string, unknown>;
   orangTua: Record<string, unknown>;
   dokumen: ClientDoc[];
@@ -93,6 +94,7 @@ export default async function ProgressDetail({
 
         <ProgressClient
           id={progress.Id}
+          progressName={progress.Name}
           siswa={siswa}
           orangTua={orangTua ?? {}}
           dokumen={(dokumen ?? []) as ClientDoc[]}

@@ -66,6 +66,7 @@ type RequiredType = (typeof REQUIRED_TYPES)[number];
 
 type ProgressDetailClientProps = {
   id: string;
+  progressName: string;
   siswa: Record<string, unknown>;
   orangTua: Record<string, unknown> | ParentRel[];
   dokumen: Doc[];
@@ -115,6 +116,7 @@ const fmtIDR = (v?: number | null) =>
 
 export default function ProgressDetailClient({
   id,
+  progressName,
   siswa,
   orangTua,
   dokumen,
@@ -157,6 +159,12 @@ export default function ProgressDetailClient({
   const getDocOpenUrl = (d: Doc): string =>
     d.ContentVersionId ? `/api/salesforce/files/version/${d.ContentVersionId}/data` : (d.Document_Link__c ?? d.Url__c ?? "");
 
+  const accId: string =
+    (siswa && typeof siswa === "object" && typeof (siswa as { Id?: unknown }).Id === "string")
+      ? (siswa as { Id: string }).Id
+      : "";
+
+
   const docsByType = useMemo(() => {
     const m = new Map<string, Doc>();
     for (const d of docsEdit) {
@@ -192,7 +200,14 @@ export default function ProgressDetailClient({
     try {
       setSavingSegment(segment);
 
+      let nextDocsRef: Doc[] | undefined;
+
       if (segment === "dokumen") {
+        // Ensure we have Account Id; Apex/example expects it
+        if (!accId) {
+          throw new Error("Account Id (siswa.Id) tidak ditemukan.");
+        }
+
         const entries = Object.entries(pendingUploads) as [RequiredType, File | null][];
         const nextDocs = deepClone(docsEdit);
 
@@ -200,38 +215,69 @@ export default function ProgressDetailClient({
           if (!file) continue;
 
           const base64 = await fileToBase64(file);
-          const res = await fetch("/api/salesforce/upload", {
+          const filename = file.name || `${type}.bin`;
+          const mime = file.type || "application/octet-stream";
+
+          const res = await fetch(`${apiBase}/api/salesforce/upload`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              filename: file.name,
-              base64,
-              relateToId: id,
-              accountId: (siswa as { Id?: string }).Id,
-              documentType: type,
+              accId,              // Account Id from siswa.Id
+              oppId: id,          // Opportunity Id (Application_Progress__c)
+              progressName,            // optional; server falls back gracefully
+              base64,             // raw base64 (no data: prefix)
+              filename,           // original filename
+              mime,               // image/png or image/jpeg
+              documentType: type, // REQUIRED_TYPES item, e.g. "Pas Foto 3x4"
             }),
           });
-          if (!res.ok) throw new Error(await res.text());
-          const json: { ok: boolean; downloadUrl?: string } = await res.json();
-          if (!json.ok || !json.downloadUrl) throw new Error("Upload response invalid");
 
+          if (!res.ok) throw new Error(await res.text());
+          const j: {
+            success?: boolean;
+            contentDocumentId?: string;
+            contentVersionId?: string;  // ← Tambahkan ini
+            accountDocumentId?: string;
+          } = await res.json();
+
+          if (!j.success || !j.contentDocumentId || !j.accountDocumentId) {
+            throw new Error("Upload response invalid");
+          }
+
+          // Reflect the server changes locally:
+          // - mark as uploaded (set link)
+          // - store Account_Document__c Id (so subsequent PATCH can target it)
+          const openUrl = j.contentVersionId
+            ? `/lightning/r/ContentVersion/${j.contentVersionId}/view`  // ← Versi terbaru
+            : j.contentDocumentId
+              ? `/lightning/r/ContentDocument/${j.contentDocumentId}/view`
+              : "";
           const idx = nextDocs.findIndex((d) => getType(d) === type);
           if (idx >= 0) {
             const copy = { ...nextDocs[idx] };
-            setLinkMutable(copy, json.downloadUrl || "");
+            copy.Id = j.accountDocumentId;
+            copy.ContentVersionId = j.contentVersionId || null;
+            setLinkMutable(copy, openUrl);
             nextDocs[idx] = copy;
           } else {
             nextDocs.push({
+              Id: j.accountDocumentId,
               Name: type,
               Document_Type__c: type,
-              Document_Link__c: json.downloadUrl,
+              Document_Link__c: openUrl,
+              ContentVersionId: j.contentVersionId || null,
             });
           }
         }
 
+        nextDocsRef = nextDocs;
+
+        // Update local state + send metadata-only PATCH
         setDocsEdit(nextDocs);
         body.dokumen = nextDocs;
-      } else if (segment === "siswa") {
+      }
+      else if (segment === "siswa") {
         body.siswa = siswaEdit;
       } else if (segment === "orangTua") {
         if (isOrtuArray) {
@@ -270,8 +316,9 @@ export default function ProgressDetailClient({
 
       // Sync originals
       if (segment === "dokumen") {
+        const src = nextDocsRef ?? docsEdit;
         (originalDocs as Doc[]).length = 0;
-        (originalDocs as Doc[]).push(...JSON.parse(JSON.stringify(docsEdit)));
+        (originalDocs as Doc[]).push(...deepClone(src));
         setPendingUploads({});
       } else if (segment === "siswa") {
         Object.assign(originalSiswa as object, JSON.parse(JSON.stringify(siswaEdit)));

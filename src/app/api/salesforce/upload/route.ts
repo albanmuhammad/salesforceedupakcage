@@ -1,132 +1,178 @@
+// src/app/api/salesforce/upload/route.ts
 import { NextResponse } from "next/server";
+import type { Connection, QueryResult } from "jsforce";
 import { getConn } from "@/lib/salesforce/client";
-import type { QueryResult } from "jsforce";
 
-// request body yang diterima
-type UploadBody = {
+type Body = {
+  accId: string;
+  oppId: string;
+  progressName: string;
+  base64: string;
   filename: string;
-  base64: string; // base64 raw tanpa prefix "data:...;base64,"
-  relateToId: string; // wajib → biasanya Opportunity Id (Application Progress)
-  accountId?: string; // opsional → kalau object Account_Document__c punya lookup ke Account
-  documentType: string; // wajib → contoh: "Pas Foto 3x4"
+  mime: string;
+  documentType: string;
 };
 
-function soqlEscape(str = "") {
-  return String(str).replace(/'/g, "\\'");
+function extFromMime(m: string): string {
+  return m === "image/png" ? "png" : "jpg";
 }
+
+async function safeCreateCDL(
+  conn: Connection,
+  contentDocumentId: string,
+  linkedId: string
+): Promise<void> {
+  try {
+    const exists: QueryResult<{ Id: string }> = await conn.query(`
+      SELECT Id FROM ContentDocumentLink
+      WHERE ContentDocumentId='${contentDocumentId}'
+        AND LinkedEntityId='${linkedId}'
+      LIMIT 1
+    `);
+
+    if (exists.totalSize > 0) return;
+
+    await conn.sobject("ContentDocumentLink").create({
+      ContentDocumentId: contentDocumentId,
+      LinkedEntityId: linkedId,
+      ShareType: "V",
+      Visibility: "AllUsers",
+    });
+  } catch {
+    // ignore
+  }
+}
+
+export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
-    const { filename, base64, relateToId, accountId, documentType } =
-      (await req.json()) as UploadBody;
+    const json = (await req.json()) as Body;
+    const { accId, oppId, progressName, base64, filename, mime, documentType } =
+      json;
 
-    if (!filename || !base64 || !relateToId || !documentType) {
+    if (!accId || !oppId || !base64 || !filename || !mime || !documentType) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: "filename, base64, relateToId & documentType required",
-        },
+        { success: false, message: "Missing required parameters" },
         { status: 400 }
       );
     }
 
     const conn = await getConn();
+    const ext = (filename.split(".").pop() || extFromMime(mime)).toLowerCase();
+    const titleBase = `${documentType}_${progressName || "Tanpa Nama"}`.trim();
 
-    // 1) Buat ContentVersion
-    const cvRes = await conn.sobject("ContentVersion").create({
-      Title: filename.replace(/\.[^.]+$/, ""),
-      PathOnClient: filename,
-      VersionData: base64,
-      FirstPublishLocationId: relateToId, // publish langsung ke Opportunity
-    });
+    // === Ensure Account_Document__c (same as your code) ===
+    const existing = await conn.query<{
+      Id: string;
+      Name: string;
+      Application_Progress__c?: string | null;
+    }>(`
+      SELECT Id, Name, Application_Progress__c
+      FROM Account_Document__c
+      WHERE Account__c='${accId}'
+        AND Document_Type__c='${documentType}'
+        AND (Application_Progress__c='${oppId}' OR Application_Progress__c = NULL)
+      ORDER BY Application_Progress__c NULLS LAST
+      LIMIT 1
+    `);
 
-    if (!cvRes.success) {
-      const msg =
-        Array.isArray(cvRes.errors) && cvRes.errors[0]?.message
-          ? cvRes.errors[0].message
-          : "ContentVersion create failed";
-      return NextResponse.json({ ok: false, error: msg }, { status: 500 });
-    }
-
-    // 2) Ambil ContentDocumentId dari versi
-    const qRes: QueryResult<{ Id: string; ContentDocumentId: string }> =
-      await conn.query(
-        `SELECT Id, ContentDocumentId 
-         FROM ContentVersion 
-         WHERE Id='${soqlEscape(cvRes.id as string)}' 
-         LIMIT 1`
-      );
-    const cv = qRes.records[0];
-    const contentDocumentId = cv?.ContentDocumentId;
-    if (!contentDocumentId) {
-      return NextResponse.json(
-        { ok: false, error: "ContentDocumentId not found" },
-        { status: 500 }
-      );
-    }
-
-    // 3) Shepherd URL untuk di-save di custom object
-    const shepherdUrl = `${conn.instanceUrl}/sfc/servlet.shepherd/document/download/${contentDocumentId}`;
-
-    // 4) Upsert Account_Document__c
-    const qDoc = await conn.query<{ Id: string }>(
-      `SELECT Id 
-       FROM Account_Document__c 
-       WHERE Application_Progress__c='${soqlEscape(relateToId)}'
-         AND Document_Type__c='${soqlEscape(documentType)}'
-       LIMIT 1`
-    );
-
-    let accountDocumentId: string;
-    if (qDoc.totalSize > 0) {
-      // update record existing
-      accountDocumentId = qDoc.records[0].Id;
-      await conn.sobject("Account_Document__c").update({
-        Id: accountDocumentId,
-        Document_Link__c: shepherdUrl,
-        Verified__c: false,
-      });
+    let docRecId: string;
+    if (existing.totalSize > 0) {
+      docRecId = existing.records[0].Id;
     } else {
-      // insert baru
       const created = await conn.sobject("Account_Document__c").create({
-        Application_Progress__c: relateToId,
-        Account__c: accountId, // opsional
+        Account__c: accId,
+        Application_Progress__c: oppId,
         Document_Type__c: documentType,
-        Document_Link__c: shepherdUrl,
         Verified__c: false,
-        Name: `${documentType} ${filename}`,
+        Name: `${documentType} ${(progressName || "").trim()}`.trim(),
       });
-      if (!created.success) {
-        const errMsg =
-          Array.isArray(created.errors) && created.errors[0]?.message
-            ? created.errors[0].message
-            : "Failed to create Account_Document__c";
-        return NextResponse.json({ ok: false, error: errMsg }, { status: 500 });
-      }
-      accountDocumentId = created.id as string;
+      if (!created.success)
+        throw new Error("Gagal membuat Account_Document__c");
+      docRecId = created.id as string;
     }
 
-    // 5) Link file juga ke record Account_Document__c (agar related list Files muncul)
-    await conn
-      .sobject("ContentDocumentLink")
-      .create({
-        ContentDocumentId: contentDocumentId,
-        LinkedEntityId: accountDocumentId,
-        ShareType: "V",
-        Visibility: "AllUsers",
-      })
-      .catch(() => {
-        /* abaikan duplicate CDL */
+    // === Try to REUSE existing ContentDocument (versioning) ===
+    const cdl = await conn.query<{ ContentDocumentId: string }>(`
+      SELECT ContentDocumentId
+      FROM ContentDocumentLink
+      WHERE LinkedEntityId='${docRecId}'
+      LIMIT 1
+    `);
+
+    let contentDocumentId: string | null =
+      cdl.records?.[0]?.ContentDocumentId || null;
+
+    if (contentDocumentId) {
+      // ---- Create a NEW VERSION on the SAME ContentDocument ----
+      const cvCreate = await conn.sobject("ContentVersion").create({
+        Title: titleBase,
+        PathOnClient: `${titleBase}.${ext}`,
+        VersionData: base64,
+        ContentDocumentId: contentDocumentId, // <-- key to versioning
       });
+      if (!cvCreate.success)
+        throw new Error("Gagal membuat versi baru (ContentVersion)");
+    } else {
+      // ---- No existing doc linked: create a fresh ContentDocument ----
+      const cvCreate = await conn.sobject("ContentVersion").create({
+        Title: titleBase,
+        PathOnClient: `${titleBase}.${ext}`,
+        VersionData: base64,
+        FirstPublishLocationId: oppId, // publish to Opportunity
+      });
+      if (!cvCreate.success) throw new Error("Gagal membuat ContentVersion");
+
+      const cvRow = await conn.query<{ ContentDocumentId: string }>(`
+        SELECT ContentDocumentId
+        FROM ContentVersion
+        WHERE Id = '${cvCreate.id}'
+        LIMIT 1
+      `);
+      contentDocumentId = cvRow.records?.[0]?.ContentDocumentId || null;
+      if (!contentDocumentId)
+        throw new Error("Tidak menemukan ContentDocumentId");
+    }
+
+    // ---- Make sure it’s linked where we need it ----
+    await safeCreateCDL(conn, contentDocumentId!, accId);
+    await safeCreateCDL(conn, contentDocumentId!, oppId);
+    await safeCreateCDL(conn, contentDocumentId!, docRecId);
+
+    // ---- Normalize titles (optional but nice) ----
+    await conn
+      .sobject("ContentDocument")
+      .update({ Id: contentDocumentId!, Title: titleBase });
+    const latestCvQuery = await conn.query<{ Id: string }>(`
+  SELECT Id
+  FROM ContentVersion
+  WHERE ContentDocumentId='${contentDocumentId}'
+  ORDER BY VersionNumber DESC
+  LIMIT 1
+`);
+
+    const latestVersionId = latestCvQuery.records?.[0]?.Id;
+    const documentLink = latestVersionId
+      ? `/lightning/r/ContentVersion/${latestVersionId}/view` // ← Pakai ContentVersion
+      : `/lightning/r/ContentDocument/${contentDocumentId}/view`; // fallback
+
+    await conn.sobject("Account_Document__c").update({
+      Id: docRecId,
+      Verified__c: false,
+      Document_Link__c: documentLink, // ← Link ke versi terbaru
+      Name: `${documentType} ${(progressName || "").trim()}`.trim(),
+    });
 
     return NextResponse.json({
-      ok: true,
+      success: true,
       contentDocumentId,
-      accountDocumentId,
-      downloadUrl: shepherdUrl,
+      contentVersionId: latestVersionId,
+      accountDocumentId: docRecId,
     });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "upload failed";
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("upload ERR:", err);
+    return NextResponse.json({ success: false, message: msg }, { status: 500 });
   }
 }

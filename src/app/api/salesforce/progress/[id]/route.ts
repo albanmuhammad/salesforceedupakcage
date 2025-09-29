@@ -569,11 +569,20 @@ export async function PATCH(
     }
 
     case "dokumen": {
-      const docs = Array.isArray(
-        (body as Extract<PatchBody, { segment: "dokumen" }>).dokumen
-      )
-        ? (body as Extract<PatchBody, { segment: "dokumen" }>).dokumen
+      type DocInput = {
+        Id?: string;
+        Name?: string | null;
+        Type__c?: string | null;
+        Url__c?: string | null;
+        Document_Type__c?: string | null;
+        Document_Link__c?: string | null;
+      };
+
+      type PatchDokumen = Extract<PatchBody, { segment: "dokumen" }>;
+      const docs = Array.isArray((body as PatchDokumen).dokumen)
+        ? ((body as PatchDokumen).dokumen as DocInput[])
         : null;
+
       if (!docs) {
         return NextResponse.json(
           { ok: false, error: "invalid_payload_dokumen" },
@@ -581,73 +590,87 @@ export async function PATCH(
         );
       }
 
-      const types = Array.from(
-        new Set(
-          docs
-            .map((d) => (d.Type__c ?? "").trim())
-            .filter((t): t is string => t.length > 0)
-        )
-      );
-
-      const existingByType = new Map<string, { Id: string }>();
-      if (types.length) {
-        const inList = types.map((t) => `'${esc(t)}'`).join(",");
-        const qRes: QueryResult<{ Id: string; Document_Type__c: string }> =
-          await conn.query(
-            `SELECT Id, Document_Type__c
-             FROM Account_Document__c
-             WHERE Application_Progress__c='${esc(
-               id
-             )}' AND Document_Type__c IN (${inList})`
-          );
-        for (const r of qRes.records) {
-          if (r.Document_Type__c) {
-            existingByType.set(r.Document_Type__c, { Id: r.Id });
-          }
-        }
+      // Ambil AccountId sekali saja (hemat query)
+      // Ambil AccountId + Progress Name sekali saja (hemat query)
+      const oppRes = await conn.query<{ AccountId: string; Name: string }>(`
+  SELECT AccountId, Name
+  FROM Opportunity
+  WHERE Id = '${esc(id)}'
+  LIMIT 1
+`);
+      const accId = oppRes.records?.[0]?.AccountId;
+      const progressName = oppRes.records?.[0]?.Name || "";
+      if (!accId) {
+        return NextResponse.json(
+          { ok: false, error: "missing_account" },
+          { status: 400 }
+        );
       }
-
-      const toInsert: Array<{
-        Name: string;
-        Application_Progress__c: string;
-        Document_Type__c: string;
-        Document_Link__c: string;
-      }> = [];
 
       const toUpdate: Array<{
         Id: string;
-        Name: string;
-        Application_Progress__c: string;
-        Document_Type__c: string;
-        Document_Link__c: string;
+        Name?: string | null;
+        Document_Link__c?: string | null;
       }> = [];
 
       for (const d of docs) {
-        const type = (d.Type__c ?? "").trim();
-        if (!type) continue;
+        const type = (d.Type__c ?? d.Document_Type__c ?? "").trim();
+        const link = (d.Url__c ?? d.Document_Link__c ?? "").trim();
 
-        const link = (d.Url__c ?? "").trim();
-        const name = d.Name?.trim() || type || "Document";
+        // Nama canonical: "Type ProgressName"
+        const desiredName = type ? `${type} ${progressName}`.trim() : "";
 
-        const base = {
-          Name: name,
-          Application_Progress__c: id,
-          Document_Type__c: type,
-          Document_Link__c: link,
-        };
+        // Cari target row
+        let docId = d.Id?.trim() || "";
 
-        const existing = d.Id ? { Id: d.Id } : existingByType.get(type);
-        if (existing?.Id) {
-          toUpdate.push({ Id: existing.Id, ...base });
-        } else {
-          toInsert.push(base);
+        if (!docId && type) {
+          const q = await conn.query<{
+            Id: string;
+            Application_Progress__c?: string | null;
+          }>(`
+      SELECT Id, Application_Progress__c
+      FROM Account_Document__c
+      WHERE Account__c='${esc(accId)}'
+        AND Document_Type__c='${esc(type)}'
+        AND (Application_Progress__c='${esc(
+          id
+        )}' OR Application_Progress__c=null)
+      ORDER BY Application_Progress__c NULLS LAST
+      LIMIT 1
+    `);
+          if (q.totalSize > 0) {
+            docId = q.records[0].Id;
+          }
         }
+
+        if (!docId) continue;
+
+        const upd: {
+          Id: string;
+          Name?: string | null;
+          Document_Link__c?: string | null;
+        } = { Id: docId };
+
+        // Selalu pakai format Name "Type ProgressName" (sesuai requirement)
+        if (desiredName) upd.Name = desiredName;
+
+        if (link) upd.Document_Link__c = link;
+
+        if (upd.Name || upd.Document_Link__c) toUpdate.push(upd);
       }
 
-      if (toUpdate.length)
-        await conn.sobject("Account_Document__c").update(toUpdate);
-      if (toInsert.length)
-        await conn.sobject("Account_Document__c").insert(toInsert);
+      if (toUpdate.length) {
+        const res = await conn.sobject("Account_Document__c").update(toUpdate);
+        const failed = (
+          res as Array<{ success: boolean; errors?: unknown[] }>
+        ).find((r) => !r.success);
+        if (failed) {
+          return NextResponse.json(
+            { ok: false, error: "sf_update_failed" },
+            { status: 500 }
+          );
+        }
+      }
 
       return NextResponse.json({ ok: true });
     }

@@ -66,6 +66,7 @@ export default function OpportunityCard({
                 ok: boolean;
                 opp: { Id: string; StageName?: string | null; Web_Stage__c?: string | null };
             };
+            setGlobalLoading?.(false);
             return updated.opp;
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : "Failed to activate");
@@ -84,6 +85,7 @@ export default function OpportunityCard({
         if (reReg) {
             router.push(`/progress/${oppId}`); // next/router akan ganti halaman
         } else {
+            setGlobalLoading?.(false);
             window.location.href = `https://edudevsite.vercel.app/register.html?opp=${oppId}`;
         }
         // JANGAN setGlobalLoading(false) — biarkan overlay sampai navigasi selesai.
