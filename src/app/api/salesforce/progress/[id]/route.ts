@@ -5,7 +5,6 @@ import type { QueryResult, SaveResult } from "jsforce";
 
 /* ===================== Types ===================== */
 
-// ==== TYPES ====
 type Progress = {
   Id: string;
   Name: string;
@@ -105,11 +104,22 @@ type PatchBody =
   | { segment: "orangTua"; id: string; orangTua: ParentRel[] }
   | { segment: "activate" };
 
-// ==== UTILS ====
+/* =============== Utils =============== */
+
 function esc(s: string) {
-  // Minimal escape untuk query literal single-quoted
   return s.replace(/'/g, "\\'");
 }
+
+function normalizeBirthdate(input: unknown): string | undefined {
+  const s = String(input ?? "").trim();
+  if (!s) return;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  return s;
+}
+
+/* ===================== GET ===================== */
 
 export async function GET(
   req: Request,
@@ -152,7 +162,7 @@ export async function GET(
     );
   }
 
-  // 2) Validasi akses + ambil Account minimal (plus Phone & School__c)
+  // 2) Validasi akses + ambil Account minimal
   let allowed = false;
   let siswaAccount: AccountInfo | null = null;
 
@@ -226,7 +236,7 @@ export async function GET(
     );
   }
 
-  // 3) Dokumen (custom object) — ambil baris Account_Document__c
+  // 3) Dokumen (custom object)
   const rawDocs = await sfQuery<DocRow>(`
     SELECT Id, Name, Document_Type__c, Document_Link__c
     FROM Account_Document__c
@@ -235,7 +245,7 @@ export async function GET(
   `);
   console.log(`[${traceId}] account documents count: ${rawDocs.length}`);
 
-  // 4) Perluas pencarian file via ContentDocumentLink pada Opportunity, Account, dan semua Contact di OCR
+  // 4) File via ContentDocumentLink
   const candidateIds = new Set<string>();
   candidateIds.add(progress.Id);
   if (progress.AccountId) candidateIds.add(progress.AccountId);
@@ -267,13 +277,12 @@ export async function GET(
     );
   }
 
-  // ==== Helper: ekstrak ID dari URL (068/069) ====
+  // Helper: ekstrak 068/069 dari URL
   function extractIdsFromUrl(url?: string | null): {
     verId?: string;
     docId?: string;
   } {
     if (!url) return {};
-    // Cari 068… (ContentVersionId) atau 069… (ContentDocumentId)
     const m068 = url.match(/(?:^|[^\w])(068[0-9A-Za-z]{15,18})/);
     if (m068?.[1]) return { verId: m068[1] };
     const m069 = url.match(/(?:^|[^\w])(069[0-9A-Za-z]{15,18})/);
@@ -281,16 +290,15 @@ export async function GET(
     return {};
   }
 
-  // ==== 1) Buat index dari CDL: 069 -> 068 (Latest) + judul ternormalisasi ====
+  // Index CDL: 069 -> 068 + normalized title
   const docIdToLatestVer = new Map<string, string>(); // 069 -> 068
   const normalizedTitleToVer = new Map<string, string>();
 
-  function normTitle(s?: string | null) {
-    return (s || "")
+  const normTitle = (s?: string | null) =>
+    (s || "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, " ")
       .trim();
-  }
 
   for (const r of cdl) {
     const latest = r.ContentDocument.LatestPublishedVersionId;
@@ -304,14 +312,11 @@ export async function GET(
     }
   }
 
-  // ==== 2) Siapkan batch lookup untuk 069 yang belum ada di map (opsional & hemat kueri) ====
+  // Pre-scan rawDocs: cari 068/069 di URL
   const missing069 = new Set<string>();
-
-  // Koleksi kandidat ContentVersionId untuk tiap dok supaya tidak query berulang
   const docIdFromLink: Array<{ idx: number; docId: string }> = [];
   const verIdFromLink: Array<{ idx: number; verId: string }> = [];
 
-  // Pre-scan rawDocs untuk ambil ID dari link
   rawDocs.forEach((d, idx) => {
     const { verId, docId } = extractIdsFromUrl(d.Document_Link__c);
     if (verId) verIdFromLink.push({ idx, verId });
@@ -321,7 +326,7 @@ export async function GET(
     }
   });
 
-  // Jika ada 069 yang belum punya latest version di map, batch query ContentDocument
+  // Lengkapi 069 yang belum punya 068 via ContentDocument
   if (missing069.size) {
     const inList = Array.from(missing069)
       .map((s) => `'${esc(s)}'`)
@@ -330,10 +335,10 @@ export async function GET(
       Id: string;
       LatestPublishedVersionId: string;
     }>(`
-    SELECT Id, LatestPublishedVersionId
-    FROM ContentDocument
-    WHERE Id IN (${inList})
-  `);
+      SELECT Id, LatestPublishedVersionId
+      FROM ContentDocument
+      WHERE Id IN (${inList})
+    `);
     for (const r of rows) {
       if (r.Id && r.LatestPublishedVersionId) {
         docIdToLatestVer.set(r.Id, r.LatestPublishedVersionId);
@@ -341,13 +346,8 @@ export async function GET(
     }
   }
 
-  // ==== 3) Bangun hasil 'docs' dengan prioritas:
-  // (a) URL punya 068 -> pakai itu
-  // (b) URL punya 069 -> map ke 068 via docIdToLatestVer
-  // (c) Cocokkan judul ternormalisasi (Name vs Title)
-  // (d) Gagal -> null
+  // Bangun dokumen final (pilih ContentVersionId terbaik)
   const docs = rawDocs.map((d, i) => {
-    // (a) langsung 068 dari URL
     const verDirect = verIdFromLink.find((x) => x.idx === i)?.verId;
     if (verDirect) {
       return {
@@ -359,7 +359,6 @@ export async function GET(
       };
     }
 
-    // (b) 069 dari URL → 068 via map
     const docFromUrl = docIdFromLink.find((x) => x.idx === i)?.docId;
     const verFrom069 = docFromUrl
       ? docIdToLatestVer.get(docFromUrl) ?? null
@@ -374,7 +373,6 @@ export async function GET(
       };
     }
 
-    // (c) fallback judul
     const key = normTitle(d.Name);
     const verFromTitle = key ? normalizedTitleToVer.get(key) ?? null : null;
 
@@ -383,20 +381,18 @@ export async function GET(
       Name: d.Name,
       Type__c: d.Document_Type__c ?? null,
       Url__c: d.Document_Link__c ?? null,
-      ContentVersionId: verFromTitle, // bisa null kalau tidak ketemu
+      ContentVersionId: verFromTitle,
     };
   });
 
-  // Pilih foto: judul mengandung "pas foto", jika tidak ada ambil entri pertama
+  // Pilih foto
   const photo =
     cdl.find((x) =>
       (x.ContentDocument.Title || "").toLowerCase().includes("pas foto")
     ) || cdl[0];
-
   let photoVersionId: string | null =
     photo?.ContentDocument.LatestPublishedVersionId || null;
 
-  // (opsional) fallback verifikasi via ContentVersion jika title kosong atau tidak ada LatestPublishedVersionId
   if (!photoVersionId && cdl.length) {
     const docIds = cdl.map((r) => `'${esc(r.ContentDocumentId)}'`).join(",");
     const versions = await sfQuery<VersionRow>(`
@@ -410,6 +406,7 @@ export async function GET(
     photoVersionId = versions[0]?.Id ?? null;
   }
 
+  // Payments
   const qPayments = `
     SELECT
       Id, Name,
@@ -450,6 +447,62 @@ export async function GET(
     }));
   }
 
+  // 6) Picklist Type__c (ACTIVE) — TANPA any
+  type PicklistValue = { active?: boolean; value?: string | null };
+  type SObjectField = {
+    name?: string | null;
+    picklistValues?: PicklistValue[] | null;
+  };
+  type SObjectDescribe = { fields?: SObjectField[] | null };
+
+  const isPicklistValue = (v: unknown): v is PicklistValue =>
+    typeof v === "object" &&
+    v !== null &&
+    ("active" in (v as object) || "value" in (v as object));
+  const isField = (f: unknown): f is SObjectField => {
+    if (typeof f !== "object" || f === null) return false;
+    const nameOk =
+      !("name" in f) ||
+      typeof (f as { name?: unknown }).name === "string" ||
+      (f as { name?: unknown }).name == null;
+    const pv = (f as { picklistValues?: unknown }).picklistValues;
+    const pvOk = pv == null || (Array.isArray(pv) && pv.every(isPicklistValue));
+    return nameOk && pvOk;
+  };
+  const isDescribe = (d: unknown): d is SObjectDescribe =>
+    typeof d === "object" &&
+    d !== null &&
+    (!("fields" in d) || Array.isArray((d as { fields?: unknown }).fields));
+
+  let relTypeOptions: string[] = [];
+  try {
+    const conn = await getConn();
+    const rawDesc: unknown = await conn.sobject("Relationship__c").describe();
+    const desc: SObjectDescribe = isDescribe(rawDesc)
+      ? rawDesc
+      : { fields: [] };
+    const fields = Array.isArray(desc.fields)
+      ? desc.fields.filter(isField)
+      : [];
+    const typeField = fields.find((f) => (f.name ?? "") === "Type__c");
+
+    relTypeOptions = Array.isArray(typeField?.picklistValues)
+      ? typeField!.picklistValues
+          .filter(
+            (p): p is PicklistValue => isPicklistValue(p) && (p.active ?? false)
+          )
+          .map((p) => (typeof p.value === "string" ? p.value.trim() : ""))
+          .filter((v): v is string => v.length > 0)
+      : [];
+    console.log(`[${traceId}] relTypeOptions from SF:`, relTypeOptions);
+  } catch (e) {
+    console.log(`[${traceId}] describe Relationship__c failed`, e);
+  }
+  if (relTypeOptions.length === 0) {
+    // fallback agar UI tetap hidup
+    relTypeOptions = ["Father", "Mother"];
+  }
+
   const debugPayload = debug
     ? {
         debug: {
@@ -475,29 +528,18 @@ export async function GET(
     data: {
       progress,
       siswa: siswaAccount,
-      orangTua: orangTua,
-      dokumen: docs, // sudah include ContentVersionId hasil match Title
+      orangTua,
+      dokumen: docs,
       photoVersionId, // untuk <img src="/api/salesforce/files/version/{id}/data">
       payments,
+      relTypeOptions, // <<<<<< kirim ke client
       ...debugPayload,
     },
   });
 }
 
-/* ===================== Helpers ===================== */
-
-function normalizeBirthdate(input: unknown): string | undefined {
-  const s = String(input ?? "").trim();
-  if (!s) return;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-  return s;
-}
-
 /* ===================== PATCH ===================== */
 
-/** Payload aman untuk update Account (Id wajib, field lain opsional) */
 type AccountUpdatePayload = {
   Id: string;
   PersonBirthdate?: string;
@@ -511,7 +553,7 @@ export async function PATCH(
   const { id: rawId } = await ctx.params;
   const id = String(rawId);
 
-  // ✅ Auth sama seperti GET
+  // Auth
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData?.user?.id) {
@@ -530,17 +572,17 @@ export async function PATCH(
         const cur = (await conn
           .sobject("Opportunity")
           .retrieve(id)) as OpportunityRecord;
-        if (!cur?.Id)
+        if (!cur?.Id) {
           return NextResponse.json(
             { ok: false, error: "not_found" },
             { status: 404 }
           );
+        }
 
         if (!cur.Is_Active__c && cur.StageName !== "Closed Lost") {
-          const upd = await conn.sobject("Opportunity").update({
-            Id: id,
-            Is_Active__c: true,
-          });
+          const upd = await conn
+            .sobject("Opportunity")
+            .update({ Id: id, Is_Active__c: true });
           if (!upd.success) {
             return NextResponse.json(
               { ok: false, error: "sf_update_failed" },
@@ -723,7 +765,7 @@ export async function PATCH(
 
     case "orangTua": {
       try {
-        // Ambil Account & PersonContactId (003…)
+        // --- Ambil Account & PersonContactId (003…) ---
         const opp = (await conn.sobject("Opportunity").retrieve(id)) as {
           Id?: string;
           AccountId?: string | null;
@@ -740,7 +782,7 @@ export async function PATCH(
           Id?: string;
           PersonContactId?: string | null;
         };
-        const studentContactId = acc?.PersonContactId || null; // Related_Contact__c
+        const studentContactId = acc?.PersonContactId || null;
 
         const items = (body as Extract<PatchBody, { segment: "orangTua" }>)
           .orangTua;
@@ -751,13 +793,51 @@ export async function PATCH(
           );
         }
 
+        // --- Helper normalisasi phone sederhana ---
+        const normalizePhone = (raw?: string | null) =>
+          (raw || "").replace(/[^\d+]/g, "").replace(/^0/, "+62");
+
+        // --- Cari contact existing by email/phone (tanpa LOWER di WHERE) ---
+        async function findExistingContact(
+          email?: string | null,
+          phone?: string | null
+        ) {
+          const e = (email || "").trim(); // jangan pakai LOWER()
+          const p = normalizePhone(phone);
+          if (!e && !p) return null;
+
+          const where: string[] = [];
+          if (e) where.push(`Email = '${esc(e)}'`);
+          if (p) where.push(`Phone = '${esc(p)}'`);
+
+          // Bungkus OR dengan (), lalu LIMIT 1
+          const q = `
+    SELECT Id, LastName, Email, Phone
+    FROM Contact
+    WHERE (${where.join(" OR ")})
+    ORDER BY LastModifiedDate DESC
+    LIMIT 1
+  `;
+          const rows = await sfQuery<{ Id: string }>(q);
+          return rows[0] ?? null;
+        }
+
         for (const p of items) {
           const type = (p.type || "").trim();
           const name = (p.name || "").trim();
           if (!type || !name) continue;
 
-          // Upsert Contact (orang tua)
+          // --- Upsert Contact (orang tua) ---
           let contactId = p.contactId || null;
+
+          // Coba reuse dulu jika tidak ada Id:
+          if (!contactId) {
+            const hit = await findExistingContact(p.email, p.phone);
+            if (hit?.Id) {
+              contactId = hit.Id;
+            }
+          }
+
           const contactPayload: {
             Id?: string;
             LastName: string;
@@ -768,12 +848,13 @@ export async function PATCH(
           } = {
             LastName: name,
             Job__c: (p.job || "").trim() || null,
-            Phone: (p.phone || "").trim() || null,
+            Phone: normalizePhone(p.phone),
             Email: (p.email || "").trim() || null,
             Address__c: (p.address || "").trim() || null,
           };
 
           if (contactId) {
+            // Update ringan (jangan kosongkan kalau payload kosong)
             await conn
               .sobject("Contact")
               .update({ Id: contactId, ...contactPayload });
@@ -788,7 +869,7 @@ export async function PATCH(
             contactId = ins.id as string;
           }
 
-          // Upsert Relationship__c
+          // --- Upsert Relationship__c ---
           const relBase: {
             Id?: string;
             Type__c: string;
