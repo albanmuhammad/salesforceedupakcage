@@ -19,7 +19,7 @@ type ApiPayment = {
 };
 
 type ApiData = {
-  progress: { Id: string; Name: string; Status__c?: string | null };
+  progress: { Id: string; Name: string; StageName: string; AccountId: string };
   siswa: Record<string, unknown>;
   orangTua?: Record<string, unknown> | null;
   dokumen?: ApiDoc[] | null;
@@ -52,6 +52,7 @@ type ClientProps = {
   payments: ApiPayment[]; // NEW
   /** ⬇️ NEW: diteruskan ke komponen client */
   relTypeOptions: string[];
+  progressStage: string;
 };
 
 export default async function ProgressDetail({
@@ -104,7 +105,7 @@ export default async function ProgressDetail({
       <div className="w-full max-w-7xl">
         <header className="mb-6">
           <h1 className="text-2xl font-semibold text-white drop-shadow-sm">
-            {progress.Name}
+            {progress.Name} - {progress.Id}
           </h1>
         </header>
 
@@ -121,6 +122,7 @@ export default async function ProgressDetail({
           payments={(payments ?? []) as ApiPayment[]}
           /** ⬇️ NEW: teruskan picklist; kalau API null/undefined pakai array kosong */
           relTypeOptions={(relTypeOptions ?? []) as string[]}
+          progressStage={progress.StageName}
         />
       </div>
     </main>

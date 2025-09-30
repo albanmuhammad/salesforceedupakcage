@@ -84,6 +84,7 @@ type ProgressDetailClientProps = {
   testCardVersionId: string | null;
   payments: PaymentInfo[];
   relTypeOptions?: string[]; // dari server (describe picklist)
+  progressStage: string;
 };
 
 function deepClone<T>(v: T): T {
@@ -138,6 +139,7 @@ export default function ProgressDetailClient({
   testCardVersionId,
   payments,
   relTypeOptions,
+  progressStage
 }: ProgressDetailClientProps) {
   const photoUrl = pasFotoVersionId ? `${apiBase}/api/salesforce/files/version/${pasFotoVersionId}/data` : "/default-avatar.png";
   const testCardUrlBase =
@@ -186,7 +188,7 @@ export default function ProgressDetailClient({
 
   const [savingSegment, setSavingSegment] = useState<"siswa" | "orangTua" | "dokumen" | null>(null);
   const saving = savingSegment !== null;
-  const canEdit = progressName === 're-registration' && !saving
+  const isDisabled = saving || progressStage !== "Re-Registration";
 
   // Docs helpers
   const getType = (d: Doc): string => d.Document_Type__c ?? d.Type__c ?? "";
@@ -500,13 +502,13 @@ export default function ProgressDetailClient({
               {isOrtuArray && (
                 <button
                   className={
-                    canEdit
+                    !isDisabled
                       ? "text-sm px-3 py-1 rounded-lg bg-gray-900 text-white hover:opacity-90"
                       : "text-sm px-3 py-1 rounded-lg bg-gray-300 text-gray-500 cursor-default pointer-events-none"
                   }
-                  disabled={!canEdit}
+                  disabled={isDisabled}
                   onClick={async () => {
-                    if (!canEdit) return;
+                    if (isDisabled) return;
                     const used = new Set(ortuArrEdit.map((p) => p.type).filter(Boolean));
                     const order = [...REL_TYPE_OPTIONS];
                     const firstFree = order.find((t) => !used.has(t)) ?? "";
@@ -829,8 +831,6 @@ export default function ProgressDetailClient({
             {REQUIRED_TYPES.map((type) => {
               const existing = docsByType.get(type);
               const uploaded = !!existing && !!getDocOpenUrl(existing!);
-
-              const isDisabled = saving || progressName !== "re-registration";
 
               return (
                 <div key={type} className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
