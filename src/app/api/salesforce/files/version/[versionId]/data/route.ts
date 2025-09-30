@@ -47,24 +47,35 @@ export async function GET(
     };
 
     // Tentukan nama & ekstensi
-    const baseName =
-      meta.PathOnClient?.split(/[\\/]/)
-        .pop()
-        ?.split(".")
-        .slice(0, -1)
-        .join(".") ||
-      meta.Title ||
-      "file";
+    // === Nama file yang rapi ===
+    const rawBaseFromPath = meta.PathOnClient?.split(/[\\/]/).pop() ?? ""; // terakhir setelah slash/backslash
+    const baseFromPath = rawBaseFromPath.includes(".")
+      ? rawBaseFromPath.split(".").slice(0, -1).join(".")
+      : rawBaseFromPath;
 
-    const extFromPath = meta.PathOnClient?.includes(".")
-      ? meta.PathOnClient.split(".").pop()
+    const baseName =
+      (meta.Title && meta.Title.trim()) || baseFromPath || "file";
+
+    const extFromPath = rawBaseFromPath.includes(".")
+      ? rawBaseFromPath.split(".").pop()
       : undefined;
 
     const ext = (meta.FileExtension || extFromPath || "").replace(
       /[^a-zA-Z0-9]/g,
       ""
-    );
-    const filename = sanitizeFilename(ext ? `${baseName}.${ext}` : baseName);
+    ); // jaga-jaga
+    const filenameRaw = ext ? `${baseName}.${ext}` : baseName;
+
+    // ASCII-safe untuk filename (tanpa URL-encode)
+    const asciiSafe = sanitizeFilename(filenameRaw);
+
+    // RFC 5987 encode untuk filename*
+    function encodeRFC5987(str: string) {
+      return encodeURIComponent(str)
+        .replace(/['()]/g, escape)
+        .replace(/\*/g, "%2A");
+    }
+    const filenameStar = `UTF-8''${encodeRFC5987(filenameRaw)}`;
 
     // (opsional) map FileType → content-type
     const typeMap: Record<string, string> = {
@@ -140,10 +151,8 @@ export async function GET(
         "Content-Type": contentType,
         "Content-Length": String(ab.byteLength),
         "Cache-Control": "private, max-age=60",
-        // filename penting agar tidak jadi "data"
-        "Content-Disposition": `${disposition}; filename="${encodeURIComponent(
-          filename
-        )}"`,
+        // Jangan URL-encode di filename="..." ; sertakan filename* utk UTF-8
+        "Content-Disposition": `${disposition}; filename="${asciiSafe}"; filename*=${filenameStar}`,
       },
     });
   } catch (e: unknown) {
