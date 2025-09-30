@@ -1,10 +1,9 @@
-// middleware.ts
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
+// src/middleware.ts
+import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function middleware(req: NextRequest) {
-  // Selalu pakai res yang sama supaya cookies yang di-set tersimpan
+  // Selalu pakai res yang sama agar cookies dari Supabase tersimpan di response yang direturn.
   const res = NextResponse.next();
 
   const supabase = createServerClient(
@@ -12,11 +11,8 @@ export async function middleware(req: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll() {
-          return req.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          // Penting: set di 'res' yang akan DIRETURN
+        getAll: () => req.cookies.getAll(),
+        setAll: (cookiesToSet) => {
           cookiesToSet.forEach(({ name, value, options }) => {
             res.cookies.set(name, value, options);
           });
@@ -25,47 +21,51 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  // ✅ Aman: verifikasi user (server contact ke Supabase Auth)
-  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  // Ambil user dari Supabase (server-side, aman)
+  const { data, error } = await supabase.auth.getUser();
+  const user = data?.user ?? null;
 
-  const user = userData?.user ?? null;
+  const { pathname } = req.nextUrl;
 
-  console.log("Middleware - path:", req.nextUrl.pathname);
-  console.log("Middleware - cookies count:", req.cookies.getAll().length);
-  console.log(
-    "Middleware - raw cookies:",
-    req.cookies.getAll().map((c) => c.name)
-  );
-  console.log(
-    "Middleware - session(user) exists:",
-    !!user,
-    "email:",
-    user?.email
-  );
-  if (userErr) console.log("Middleware - getUser error:", userErr);
+  // 1) Selalu izinkan /login (JANGAN redirect walau ada session)
+  if (pathname === "/login") {
+    return res;
+  }
 
-  // Proteksi halaman saja (dashboard & progress).
-  // Biarkan API handle auth sendiri (Route Handler kamu sudah pakai getUser()).
+  // 2) (Opsional) Izinkan static assets kalau nanti matcher-mu diperluas
+  const isPublicAsset =
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/favicon") ||
+    pathname.startsWith("/images") ||
+    pathname.endsWith(".png") ||
+    pathname.endsWith(".jpg") ||
+    pathname.endsWith(".jpeg") ||
+    pathname.endsWith(".svg") ||
+    pathname.endsWith(".ico");
+
+  if (isPublicAsset) {
+    return res;
+  }
+
+  // 3) Proteksi halaman private
   const isProtectedPage =
-    req.nextUrl.pathname.startsWith("/dashboard") ||
-    req.nextUrl.pathname.startsWith("/progress");
+    pathname.startsWith("/dashboard") ||
+    pathname.startsWith("/progress");
 
   if (isProtectedPage && !user) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("redirectedFrom", req.nextUrl.pathname);
+    // info kecil: asal redirect (opsional)
+    url.searchParams.set("redirectedFrom", pathname);
     return NextResponse.redirect(url);
   }
 
-  // ❌ Hapus blok injeksi header ke API.
-  // Itu membuat kamu return response BARU dan kehilangan cookies yang sudah di-set.
-
+  // 4) Biarkan selain itu lewat apa adanya
   return res;
 }
 
+// HANYA pasang matcher untuk halaman private agar /login tidak ikut di-handle,
+// sehingga tidak ada auto-redirect dari /login.
 export const config = {
-  // Proteksi hanya halaman; API dibiarkan ke Route Handler auth sendiri
   matcher: ["/dashboard/:path*", "/progress/:path*"],
-  // Jika mau tetap proteksi API dari middleware, tambahkan "/api/salesforce/:path*"
-  // TAPI pastikan fetch dari server KE API mengirim cookie (pakai relative URL atau kirim header cookie manual).
 };
