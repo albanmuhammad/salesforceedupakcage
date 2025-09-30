@@ -27,7 +27,7 @@ function isReRegistration(stage?: string | null, webStage?: string | null) {
     const s = normalizeStage(stage);
     const w = normalizeStage(webStage);
     const hasRe = (v: string) =>
-        v.includes("re-registration") || v.includes("closed") || v.includes("reregistr");
+        v.includes("re-registration") || v.includes("test card sent") || v.includes("reregistr");
     return hasRe(w) || hasRe(s);
 }
 

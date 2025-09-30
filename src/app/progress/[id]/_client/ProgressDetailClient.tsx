@@ -186,6 +186,7 @@ export default function ProgressDetailClient({
 
   const [savingSegment, setSavingSegment] = useState<"siswa" | "orangTua" | "dokumen" | null>(null);
   const saving = savingSegment !== null;
+  const canEdit = progressName === 're-registration' && !saving
 
   // Docs helpers
   const getType = (d: Doc): string => d.Document_Type__c ?? d.Type__c ?? "";
@@ -434,11 +435,11 @@ export default function ProgressDetailClient({
       <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
         {/* LEFT: Account */}
         <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40 p-6">
-          <div className="text-lg font-semibold text-slate-700 mb-4">data account</div>
+          <div className="text-lg font-semibold text-slate-700 mb-4">Data Akun</div>
 
           {/* Siswa */}
           <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7 mb-4">
-            <div className="text-base font-medium mb-3 text-slate-700">data siswa</div>
+            <div className="text-base font-medium mb-3 text-slate-700">Data Siswa</div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
               <div className="flex flex-col items-center">
@@ -493,14 +494,19 @@ export default function ProgressDetailClient({
           {/* Orang Tua */}
           <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7 mb-4">
             <div className="flex items-center justify-between mb-3">
-              <div className="text-base font-medium text-slate-700">data orang tua</div>
+              <div className="text-base font-medium text-slate-700">Data Orang Tua</div>
 
               {/* Add button only for array mode */}
               {isOrtuArray && (
                 <button
-                  className="text-sm px-3 py-1 rounded-lg bg-gray-900 text-white disabled:opacity-60"
-                  disabled={saving}
+                  className={
+                    canEdit
+                      ? "text-sm px-3 py-1 rounded-lg bg-gray-900 text-white hover:opacity-90"
+                      : "text-sm px-3 py-1 rounded-lg bg-gray-300 text-gray-500 cursor-default pointer-events-none"
+                  }
+                  disabled={!canEdit}
                   onClick={async () => {
+                    if (!canEdit) return;
                     const used = new Set(ortuArrEdit.map((p) => p.type).filter(Boolean));
                     const order = [...REL_TYPE_OPTIONS];
                     const firstFree = order.find((t) => !used.has(t)) ?? "";
@@ -756,7 +762,7 @@ export default function ProgressDetailClient({
 
         {/* RIGHT: Dokumen */}
         <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40 p-6">
-          <div className="text-lg font-semibold text-slate-700 mb-4">data application progres</div>
+          <div className="text-lg font-semibold text-slate-700 mb-4">Data Application Progres</div>
 
           {docsDirty && (
             <div className="flex justify-end mt-4 mb-4">
@@ -815,9 +821,6 @@ export default function ProgressDetailClient({
                     />
                   </object>
                 </div>
-                <p className="mt-2 text-xs text-slate-500">
-                  If the preview doesn’t load, click <a href={testCardPreviewUrl} target="_blank" rel="noopener noreferrer" className="underline">Open</a>.
-                </p>
               </div>
             </div>
           )}
@@ -826,6 +829,8 @@ export default function ProgressDetailClient({
             {REQUIRED_TYPES.map((type) => {
               const existing = docsByType.get(type);
               const uploaded = !!existing && !!getDocOpenUrl(existing!);
+
+              const isDisabled = saving || progressName !== "re-registration";
 
               return (
                 <div key={type} className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
@@ -883,12 +888,18 @@ export default function ProgressDetailClient({
                               onPickFile(type as RequiredType, f);
                               ensureDocEntryFor(type as RequiredType);
                             }}
-                            disabled={saving}
+                            disabled={isDisabled}
                           />
 
                           <label
                             htmlFor={idSafe}
-                            className="inline-flex items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm bg-white hover:bg-gray-50 active:bg-gray-100 disabled:opacity-60 cursor-pointer"
+                            className={
+                              isDisabled
+                                ?
+                                "inline-flex items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm bg-gray-100 text-gray-400 cursor-default pointer-events-none select-none"
+                                :
+                                "inline-flex items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm bg-white hover:bg-gray-50 active:bg-gray-100 cursor-pointer"
+                            }
                           >
                             {pendingUploads[type]?.name ? "Change File" : "Choose File"}
                           </label>
