@@ -1,4 +1,3 @@
-// app/progress/[id]/_client/ProgressDetailClient.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -253,7 +252,16 @@ export default function ProgressDetailClient({
       : d.Document_Link__c ?? d.Url__c ?? "";
   const isUploaded = (d?: Doc | null) => !!d && !!getDocOpenUrl(d);
   const isVerified = (d?: Doc | null) => !!d && d.Verified__c === true;
-  const isDeclined = (d?: Doc | null) => !!d && isUploaded(d) && d.Verified__c === false;
+
+  // NEW: hanya dokumen WAJIB yang bisa dianggap declined
+  const isRequiredType = (t: string) =>
+    REQUIRED_UPLOADS.has(t as RequiredType);
+
+  const isDeclined = (d?: Doc | null) => {
+    if (!d || !isUploaded(d)) return false;
+    const t = (d.Document_Type__c ?? d.Type__c ?? "").trim();
+    return d.Verified__c === false && isRequiredType(t);
+  };
 
   const accId: string =
     siswa &&
