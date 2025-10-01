@@ -1,6 +1,7 @@
+// app/progress/[id]/_client/ProgressDetailClient.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ModalPortal from "@/components/ModalPortal";
 import Swal from "sweetalert2";
 
@@ -12,6 +13,7 @@ type Doc = {
   Document_Type__c?: string | null;
   Document_Link__c?: string | null;
   ContentVersionId?: string | null;
+  Verified__c?: boolean | null; // status verifikasi dari Salesforce
 };
 
 type ParentRel = {
@@ -36,7 +38,7 @@ type PaymentInfo = {
   Payment_For__c?: string | null;
 };
 
-// Hanya Father & Mother yang tidak boleh dobel (bisa diubah nanti)
+// Hanya Father & Mother yang tidak boleh dobel
 const SINGLETON_TYPES = new Set<string>(["Father", "Mother", "Son"]);
 
 const LABELS: Record<string, string> = {
@@ -48,7 +50,6 @@ const LABELS: Record<string, string> = {
 
 const REQUIRED_TYPES = [
   "Pas Foto 3x4",
-  "Scan KTP Orang Tua",
   "Rapor 1",
   "Rapor 2",
   "Rapor 3",
@@ -62,9 +63,8 @@ const REQUIRED_TYPES = [
 ] as const;
 type RequiredType = (typeof REQUIRED_TYPES)[number];
 
-/** Dokumen yang WAJIB diisi (ditandai * dan divalidasi saat save) */
+/** Dokumen wajib */
 const REQUIRED_UPLOADS = new Set<RequiredType>([
-  "Scan KTP Orang Tua",
   "Rapor 1",
   "Rapor 2",
   "Rapor 3",
@@ -91,7 +91,12 @@ function deepClone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v));
 }
 function isPrimitive(v: unknown): v is string | number | boolean | null {
-  return typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null;
+  return (
+    typeof v === "string" ||
+    typeof v === "number" ||
+    typeof v === "boolean" ||
+    v === null
+  );
 }
 function diff(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) !== JSON.stringify(b);
@@ -100,7 +105,8 @@ async function fileToBase64(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
   let binary = "";
   const bytes = new Uint8Array(buf);
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.byteLength; i++)
+    binary += String.fromCharCode(bytes[i]);
   return btoa(binary);
 }
 function setLinkMutable(d: Doc, v: string) {
@@ -109,9 +115,25 @@ function setLinkMutable(d: Doc, v: string) {
 }
 function Spinner({ className = "h-5 w-5" }: { className?: string }) {
   return (
-    <svg className={`animate-spin ${className}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-      <circle className="opacity-30" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-90" fill="currentColor" d="M4 12a 8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z" />
+    <svg
+      className={`animate-spin ${className}`}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <circle
+        className="opacity-30"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="4"
+      />
+      <path
+        className="opacity-90"
+        fill="currentColor"
+        d="M4 12a 8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z"
+      />
     </svg>
   );
 }
@@ -120,12 +142,24 @@ function typeDisabledInRow(type: string, i: number, list: ParentRel[]) {
   return list.some((p, j) => j !== i && p.type === type);
 }
 function blankParent(): ParentRel {
-  return { type: "", name: "", job: "", phone: "", email: "", address: "", locked: false };
+  return {
+    type: "",
+    name: "",
+    job: "",
+    phone: "",
+    email: "",
+    address: "",
+    locked: false,
+  };
 }
 
 const fmtIDR = (v?: number | null) =>
   typeof v === "number"
-    ? new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(v)
+    ? new Intl.NumberFormat("id-ID", {
+        style: "currency",
+        currency: "IDR",
+        maximumFractionDigits: 0,
+      }).format(v)
     : "—";
 
 export default function ProgressDetailClient({
@@ -139,68 +173,94 @@ export default function ProgressDetailClient({
   testCardVersionId,
   payments,
   relTypeOptions,
-  progressStage
+  progressStage,
 }: ProgressDetailClientProps) {
-  const photoUrl = pasFotoVersionId ? `${apiBase}/api/salesforce/files/version/${pasFotoVersionId}/data` : "/default-avatar.png";
-  const testCardUrlBase =
-    testCardVersionId
-      ? `${apiBase}/api/salesforce/files/version/${testCardVersionId}/data`
-      : null;
-
-  // force inline for preview; add a tiny cache-buster so newly uploaded versions show up immediately
-  const testCardPreviewUrl = testCardUrlBase
-    ? `${testCardUrlBase}?disposition=inline&v=${encodeURIComponent(testCardVersionId ?? "")}#view=FitH`
+  const photoUrl = pasFotoVersionId
+    ? `${apiBase}/api/salesforce/files/version/${pasFotoVersionId}/data`
+    : "/default-avatar.png";
+  const testCardUrlBase = testCardVersionId
+    ? `${apiBase}/api/salesforce/files/version/${testCardVersionId}/data`
     : null;
 
-  console.log('testCardPreviewUrl', testCardPreviewUrl);
-
+  // force inline for preview
+  const testCardPreviewUrl = testCardUrlBase
+    ? `${testCardUrlBase}?disposition=inline&v=${encodeURIComponent(
+        testCardVersionId ?? ""
+      )}#view=FitH`
+    : null;
   const testCardDownloadUrl = testCardUrlBase
     ? `${testCardUrlBase}?disposition=attachment`
     : null;
-  console.log('pasFotoVersionId', pasFotoVersionId);
 
-  // Sumber dropdown Type__c (fallback lokal kalau server kosong)
+  // Sumber dropdown Type__c
   const REL_TYPE_OPTIONS: string[] =
-    relTypeOptions && relTypeOptions.length > 0 ? relTypeOptions : ["Father", "Mother", "Son"];
+    relTypeOptions && relTypeOptions.length > 0
+      ? relTypeOptions
+      : ["Father", "Mother", "Son"];
 
   const isOrtuArray = Array.isArray(orangTua);
 
   // Originals
   const originalSiswa = useMemo(() => deepClone(siswa), [siswa]);
   const originalOrtuObj = useMemo<Record<string, unknown>>(
-    () => (isOrtuArray ? {} : deepClone((orangTua && typeof orangTua === "object") ? (orangTua as Record<string, unknown>) : {})),
+    () =>
+      isOrtuArray
+        ? {}
+        : deepClone(
+            orangTua && typeof orangTua === "object"
+              ? (orangTua as Record<string, unknown>)
+              : {}
+          ),
     [orangTua, isOrtuArray]
   );
   const originalOrtuArr = useMemo<ParentRel[]>(
-    () => (!isOrtuArray ? [] : deepClone(orangTua as ParentRel[]).map((p) => ({ ...p, locked: true }))),
+    () =>
+      !isOrtuArray
+        ? []
+        : deepClone(orangTua as ParentRel[]).map((p) => ({
+            ...p,
+            locked: true,
+          })),
     [orangTua, isOrtuArray]
   );
   const originalDocs = useMemo(() => deepClone(dokumen), [dokumen]);
 
   // Editable
-  const [siswaEdit, setSiswaEdit] = useState<Record<string, unknown>>(deepClone(siswa));
-  const [ortuObjEdit, setOrtuObjEdit] = useState<Record<string, unknown>>(originalOrtuObj);
+  const [siswaEdit, setSiswaEdit] = useState<Record<string, unknown>>(
+    deepClone(siswa)
+  );
+  const [ortuObjEdit, setOrtuObjEdit] =
+    useState<Record<string, unknown>>(originalOrtuObj);
   const [ortuArrEdit, setOrtuArrEdit] = useState<ParentRel[]>(originalOrtuArr);
   const [docsEdit, setDocsEdit] = useState<Doc[]>(deepClone(dokumen));
 
   const siswaDirty = diff(originalSiswa, siswaEdit);
-  const ortuDirty = isOrtuArray ? diff(originalOrtuArr, ortuArrEdit) : diff(originalOrtuObj, ortuObjEdit);
+  const ortuDirty = isOrtuArray
+    ? diff(originalOrtuArr, ortuArrEdit)
+    : diff(originalOrtuObj, ortuObjEdit);
 
-  const [savingSegment, setSavingSegment] = useState<"siswa" | "orangTua" | "dokumen" | null>(null);
+  const [savingSegment, setSavingSegment] = useState<
+    "siswa" | "orangTua" | "dokumen" | null
+  >(null);
   const saving = savingSegment !== null;
   const isDisabled = saving || progressStage !== "Re-Registration";
 
-  // Docs helpers
+  // ===== Helpers dokumen (status) =====
   const getType = (d: Doc): string => d.Document_Type__c ?? d.Type__c ?? "";
   const getDocOpenUrl = (d: Doc): string =>
-    d.ContentVersionId ? `/api/salesforce/files/version/${d.ContentVersionId}/data` : d.Document_Link__c ?? d.Url__c ?? "";
+    d.ContentVersionId
+      ? `/api/salesforce/files/version/${d.ContentVersionId}/data`
+      : d.Document_Link__c ?? d.Url__c ?? "";
+  const isUploaded = (d?: Doc | null) => !!d && !!getDocOpenUrl(d);
+  const isVerified = (d?: Doc | null) => !!d && d.Verified__c === true;
+  const isDeclined = (d?: Doc | null) => !!d && isUploaded(d) && d.Verified__c === false;
 
   const accId: string =
-    (siswa && typeof siswa === "object" && typeof (siswa as { Id?: unknown }).Id === "string")
+    siswa &&
+    typeof siswa === "object" &&
+    typeof (siswa as { Id?: unknown }).Id === "string"
       ? (siswa as { Id: string }).Id
       : "";
-
-
 
   const docsByType = useMemo(() => {
     const m = new Map<string, Doc>();
@@ -211,15 +271,75 @@ export default function ProgressDetailClient({
     return m;
   }, [docsEdit]);
 
-  const [pendingUploads, setPendingUploads] = useState<Record<string, File | null>>({});
-  const docsDirty = diff(originalDocs, docsEdit) || Object.values(pendingUploads).some(Boolean);
+  const [pendingUploads, setPendingUploads] = useState<
+    Record<string, File | null>
+  >({});
+  const docsDirty =
+    diff(originalDocs, docsEdit) || Object.values(pendingUploads).some(Boolean);
+
+  // 🔔 Saat halaman dimuat: pop-up jika ada dokumen Declined
+  // ATAU dokumen WAJIB yang Not Uploaded (misal dihapus admin).
+  useEffect(() => {
+    const get = (t: RequiredType) => docsByType.get(t);
+
+    const declined = REQUIRED_TYPES.filter((t) =>
+      isDeclined(get(t as RequiredType))
+    );
+
+    const missing = REQUIRED_TYPES.filter(
+      (t) =>
+        REQUIRED_UPLOADS.has(t as RequiredType) &&
+        !isUploaded(get(t as RequiredType))
+    );
+
+    if (declined.length || missing.length) {
+      const htmlDeclined = declined.length
+        ? `<div><b>Ditolak / invalid:</b><ul style="margin:4px 0 0 18px">${declined
+            .map((t) => `<li>${t}</li>`)
+            .join("")}</ul></div>`
+        : "";
+
+      const htmlMissing = missing.length
+        ? `<div style="margin-top:8px"><b>Belum ada / dihapus admin:</b><ul style="margin:4px 0 0 18px">${missing
+            .map((t) => `<li>${t}</li>`)
+            .join("")}</ul></div>`
+        : "";
+
+      Swal.fire({
+        icon: "warning",
+        title: "Perlu upload ulang",
+        html: `${htmlDeclined}${htmlMissing}<br/><br/>Silakan unggah ulang dokumen yang benar.`,
+        confirmButtonText: "OK",
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function onPickFile(type: RequiredType, file: File | null) {
+    const current = docsByType.get(type);
+    if (isVerified(current)) {
+      Swal.fire({
+        icon: "info",
+        title: "Dokumen sudah diverifikasi",
+        text: `Dokumen "${type}" sudah VERIFIED dan tidak dapat diunggah ulang.`,
+        confirmButtonText: "OK",
+      });
+      return;
+    }
     setPendingUploads((prev) => ({ ...prev, [type]: file }));
   }
   function ensureDocEntryFor(type: RequiredType) {
     if (docsByType.get(type)) return;
-    setDocsEdit((prev) => [...prev, { Id: undefined, Name: type, Document_Type__c: type, Document_Link__c: "" }]);
+    setDocsEdit((prev) => [
+      ...prev,
+      {
+        Id: undefined,
+        Name: type,
+        Document_Type__c: type,
+        Document_Link__c: "",
+        Verified__c: null,
+      },
+    ]);
   }
 
   async function saveSegment(segment: "siswa" | "orangTua" | "dokumen") {
@@ -238,14 +358,13 @@ export default function ProgressDetailClient({
 
       if (segment === "dokumen") {
         // ===== VALIDASI DOKUMEN WAJIB =====
-        if (!accId) {
-          throw new Error("Account Id (siswa.Id) tidak ditemukan.");
-        }
+        if (!accId) throw new Error("Account Id (siswa.Id) tidak ditemukan.");
+
         const missing = Array.from(REQUIRED_UPLOADS).filter((t) => {
-          const existing = docsByType.get(t);
-          const alreadyUploaded = existing && getDocOpenUrl(existing);
-          const willUpload = pendingUploads[t];
-          return !alreadyUploaded && !willUpload;
+          const d = docsByType.get(t);
+          const already = d && getDocOpenUrl(d);
+          const will = pendingUploads[t];
+          return !already && !will;
         });
 
         if (missing.length > 0) {
@@ -262,11 +381,16 @@ export default function ProgressDetailClient({
         }
         // ===== END VALIDASI =====
 
-        const entries = Object.entries(pendingUploads) as [RequiredType, File | null][];
+        const entries = Object.entries(
+          pendingUploads
+        ) as [RequiredType, File | null][];
         const nextDocs = deepClone(docsEdit);
 
         for (const [type, file] of entries) {
           if (!file) continue;
+
+          const current = docsByType.get(type);
+          if (isVerified(current)) continue; // safety
 
           const base64 = await fileToBase64(file);
           const filename = file.name || `${type}.bin`;
@@ -277,13 +401,13 @@ export default function ProgressDetailClient({
             credentials: "include",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              accId,              // Account Id from siswa.Id
-              oppId: id,          // Opportunity Id (Application_Progress__c)
-              progressName,            // optional; server falls back gracefully
-              base64,             // raw base64 (no data: prefix)
-              filename,           // original filename
-              mime,               // image/png or image/jpeg
-              documentType: type, // REQUIRED_TYPES item, e.g. "Pas Foto 3x4"
+              accId, // Account Id
+              oppId: id, // Opportunity Id
+              progressName, // optional
+              base64,
+              filename,
+              mime,
+              documentType: type, // REQUIRED_TYPES item
             }),
           });
 
@@ -291,7 +415,7 @@ export default function ProgressDetailClient({
           const j: {
             success?: boolean;
             contentDocumentId?: string;
-            contentVersionId?: string;  // ← Tambahkan ini
+            contentVersionId?: string;
             accountDocumentId?: string;
           } = await res.json();
 
@@ -299,18 +423,7 @@ export default function ProgressDetailClient({
             throw new Error("Upload response invalid");
           }
 
-          // Reflect the server changes locally:
-          // - mark as uploaded (set link)
-          // - store Account_Document__c Id (so subsequent PATCH can target it)
-
-          // const openUrl = j.contentVersionId
-          //   ? `/lightning/r/ContentVersion/${j.contentVersionId}/view`  // ← Versi terbaru
-          //   : j.contentDocumentId
-          //     ? `/lightning/r/ContentDocument/${j.contentDocumentId}/view`
-          //     : "";
-
           const openUrl = `/lightning/r/ContentDocument/${j.contentDocumentId}/view`;
-
 
           const idx = nextDocs.findIndex((d) => getType(d) === type);
           if (idx >= 0) {
@@ -326,17 +439,15 @@ export default function ProgressDetailClient({
               Document_Type__c: type,
               Document_Link__c: openUrl,
               ContentVersionId: j.contentVersionId || null,
+              Verified__c: null, // menunggu admin
             });
           }
         }
 
         nextDocsRef = nextDocs;
-
-        // Update local state + send metadata-only PATCH
         setDocsEdit(nextDocs);
         body.dokumen = nextDocs;
-      }
-      else if (segment === "siswa") {
+      } else if (segment === "siswa") {
         body.siswa = siswaEdit;
       } else if (segment === "orangTua") {
         if (isOrtuArray) {
@@ -379,7 +490,10 @@ export default function ProgressDetailClient({
         (originalDocs as Doc[]).push(...deepClone(src));
         setPendingUploads({});
       } else if (segment === "siswa") {
-        Object.assign(originalSiswa as object, JSON.parse(JSON.stringify(siswaEdit)));
+        Object.assign(
+          originalSiswa as object,
+          JSON.parse(JSON.stringify(siswaEdit))
+        );
       } else if (segment === "orangTua") {
         if (isOrtuArray) {
           const locked = ortuArrEdit.map((p) => ({ ...p, locked: true }));
@@ -398,13 +512,18 @@ export default function ProgressDetailClient({
           segment === "dokumen"
             ? "Dokumen telah diperbarui."
             : segment === "siswa"
-              ? "Data siswa telah diperbarui."
-              : "Data orang tua telah diperbarui.",
+            ? "Data siswa telah diperbarui."
+            : "Data orang tua telah diperbarui.",
         confirmButtonText: "OK",
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Gagal menyimpan.";
-      await Swal.fire({ icon: "error", title: "Gagal menyimpan", text: msg, confirmButtonText: "OK" });
+      await Swal.fire({
+        icon: "error",
+        title: "Gagal menyimpan",
+        text: msg,
+        confirmButtonText: "OK",
+      });
     } finally {
       setSavingSegment(null);
     }
@@ -416,10 +535,17 @@ export default function ProgressDetailClient({
     if (key === "Phone") return String(val ?? "").trim() !== "";
     return false;
   }
-  const HIDDEN_KEYS = ["Id", "PhotoUrl", "IsPersonAccount", "PersonContactId", "Master_School__c", "Master_School__r"];
+  const HIDDEN_KEYS = [
+    "Id",
+    "PhotoUrl",
+    "IsPersonAccount",
+    "PersonContactId",
+    "Master_School__c",
+    "Master_School__r",
+  ];
   const schoolName =
-    (siswaEdit?.["Master_School__r"] as { Name?: string } | undefined)?.Name ??
-    String(siswaEdit?.["Master_School__c"] ?? "");
+    (siswaEdit?.["Master_School__r"] as { Name?: string } | undefined)
+      ?.Name ?? String(siswaEdit?.["Master_School__c"] ?? "");
 
   return (
     <>
@@ -437,11 +563,15 @@ export default function ProgressDetailClient({
       <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
         {/* LEFT: Account */}
         <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40 p-6">
-          <div className="text-lg font-semibold text-slate-700 mb-4">Data Akun</div>
+          <div className="text-lg font-semibold text-slate-700 mb-4">
+            Data Akun
+          </div>
 
           {/* Siswa */}
           <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7 mb-4">
-            <div className="text-base font-medium mb-3 text-slate-700">Data Siswa</div>
+            <div className="text-base font-medium mb-3 text-slate-700">
+              Data Siswa
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
               <div className="flex flex-col items-center">
@@ -458,7 +588,13 @@ export default function ProgressDetailClient({
               </div>
 
               <div className="md:col-span-2">
-                {renderObjectEditor(siswaEdit, setSiswaEdit, HIDDEN_KEYS, isReadOnly, saving)}
+                {renderObjectEditor(
+                  siswaEdit,
+                  setSiswaEdit,
+                  HIDDEN_KEYS,
+                  isReadOnly,
+                  saving
+                )}
 
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                   <label className="flex flex-col text-sm">
@@ -496,7 +632,9 @@ export default function ProgressDetailClient({
           {/* Orang Tua */}
           <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7 mb-4">
             <div className="flex items-center justify-between mb-3">
-              <div className="text-base font-medium text-slate-700">Data Orang Tua</div>
+              <div className="text-base font-medium text-slate-700">
+                Data Orang Tua
+              </div>
 
               {/* Add button only for array mode */}
               {isOrtuArray && (
@@ -509,13 +647,17 @@ export default function ProgressDetailClient({
                   disabled={isDisabled}
                   onClick={async () => {
                     if (isDisabled) return;
-                    const used = new Set(ortuArrEdit.map((p) => p.type).filter(Boolean));
+                    const used = new Set(
+                      ortuArrEdit.map((p) => p.type).filter(Boolean)
+                    );
                     const order = [...REL_TYPE_OPTIONS];
                     const firstFree = order.find((t) => !used.has(t)) ?? "";
 
                     // ==== Fitur: Copy previous input? ====
                     const hasPrevious = ortuArrEdit.length > 0;
-                    let phone = "", email = "", address = "";
+                    let phone = "",
+                      email = "",
+                      address = "";
                     if (hasPrevious) {
                       const result = await Swal.fire({
                         title: "Copy previous input?",
@@ -531,18 +673,11 @@ export default function ProgressDetailClient({
                         email = prev.email || "";
                         address = prev.address || "";
                       }
-                      // jika No/deny → biarkan kosong
                     }
 
                     setOrtuArrEdit((prev) => [
                       ...prev,
-                      {
-                        ...blankParent(),
-                        type: firstFree,
-                        phone,
-                        email,
-                        address,
-                      },
+                      { ...blankParent(), type: firstFree, phone, email, address },
                     ]);
                   }}
                 >
@@ -552,27 +687,41 @@ export default function ProgressDetailClient({
             </div>
 
             {/* Object mode (original) */}
-            {!isOrtuArray && renderObjectEditor(ortuObjEdit, setOrtuObjEdit, [], isReadOnly, saving)}
+            {!isOrtuArray &&
+              renderObjectEditor(ortuObjEdit, setOrtuObjEdit, [], isReadOnly, saving)}
 
             {/* Array mode */}
             {isOrtuArray && (
               <>
                 {ortuArrEdit.length === 0 ? (
-                  <div className="text-sm text-gray-500">Belum ada data orang tua.</div>
+                  <div className="text-sm text-gray-500">
+                    Belum ada data orang tua.
+                  </div>
                 ) : (
                   <div className="space-y-4">
                     {ortuArrEdit.map((p, idx) => {
                       const isLocked = !!p.locked || !!p.relationshipId;
-                      const roCls = isLocked ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "";
+                      const roCls = isLocked
+                        ? "bg-gray-100 text-gray-500 cursor-not-allowed"
+                        : "";
                       return (
-                        <div key={idx} className="rounded-2xl border border-gray-200 p-4 bg-white">
+                        <div
+                          key={idx}
+                          className="rounded-2xl border border-gray-200 p-4 bg-white"
+                        >
                           <div className="flex items-center justify-between mb-3">
-                            <div className="text-sm font-medium text-slate-700">Orang Tua #{idx + 1}</div>
+                            <div className="text-sm font-medium text-slate-700">
+                              Orang Tua #{idx + 1}
+                            </div>
                             {!isLocked && (
                               <button
                                 className="text-xs text-rose-600 underline disabled:opacity-60"
                                 disabled={saving}
-                                onClick={() => setOrtuArrEdit((prev) => prev.filter((_, i) => i !== idx))}
+                                onClick={() =>
+                                  setOrtuArrEdit((prev) =>
+                                    prev.filter((_, i) => i !== idx)
+                                  )
+                                }
                               >
                                 Remove
                               </button>
@@ -589,7 +738,10 @@ export default function ProgressDetailClient({
                                 onChange={(e) =>
                                   setOrtuArrEdit((prev) => {
                                     const next = [...prev];
-                                    next[idx] = { ...next[idx], type: e.target.value };
+                                    next[idx] = {
+                                      ...next[idx],
+                                      type: e.target.value,
+                                    };
                                     return next;
                                   })
                                 }
@@ -597,7 +749,11 @@ export default function ProgressDetailClient({
                               >
                                 <option value="">-- pilih --</option>
                                 {REL_TYPE_OPTIONS.map((t) => {
-                                  const disabled = typeDisabledInRow(t, idx, ortuArrEdit);
+                                  const disabled = typeDisabledInRow(
+                                    t,
+                                    idx,
+                                    ortuArrEdit
+                                  );
                                   return (
                                     <option key={t} value={t} disabled={disabled}>
                                       {t}
@@ -617,7 +773,10 @@ export default function ProgressDetailClient({
                                 onChange={(e) =>
                                   setOrtuArrEdit((prev) => {
                                     const next = [...prev];
-                                    next[idx] = { ...next[idx], name: e.target.value };
+                                    next[idx] = {
+                                      ...next[idx],
+                                      name: e.target.value,
+                                    };
                                     return next;
                                   })
                                 }
@@ -635,7 +794,10 @@ export default function ProgressDetailClient({
                                 onChange={(e) =>
                                   setOrtuArrEdit((prev) => {
                                     const next = [...prev];
-                                    next[idx] = { ...next[idx], job: e.target.value };
+                                    next[idx] = {
+                                      ...next[idx],
+                                      job: e.target.value,
+                                    };
                                     return next;
                                   })
                                 }
@@ -653,7 +815,10 @@ export default function ProgressDetailClient({
                                 onChange={(e) =>
                                   setOrtuArrEdit((prev) => {
                                     const next = [...prev];
-                                    next[idx] = { ...next[idx], phone: e.target.value };
+                                    next[idx] = {
+                                      ...next[idx],
+                                      phone: e.target.value,
+                                    };
                                     return next;
                                   })
                                 }
@@ -671,7 +836,10 @@ export default function ProgressDetailClient({
                                 onChange={(e) =>
                                   setOrtuArrEdit((prev) => {
                                     const next = [...prev];
-                                    next[idx] = { ...next[idx], email: e.target.value };
+                                    next[idx] = {
+                                      ...next[idx],
+                                      email: e.target.value,
+                                    };
                                     return next;
                                   })
                                 }
@@ -691,7 +859,10 @@ export default function ProgressDetailClient({
                                 onChange={(e) =>
                                   setOrtuArrEdit((prev) => {
                                     const next = [...prev];
-                                    next[idx] = { ...next[idx], address: e.target.value };
+                                    next[idx] = {
+                                      ...next[idx],
+                                      address: e.target.value,
+                                    };
                                     return next;
                                   })
                                 }
@@ -729,10 +900,14 @@ export default function ProgressDetailClient({
 
           {/* Payments */}
           <div className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
-            <div className="text-base font-medium text-slate-700 mb-3">Payment Information</div>
+            <div className="text-base font-medium text-slate-700 mb-3">
+              Payment Information
+            </div>
 
             {!payments || payments.length === 0 ? (
-              <div className="text-sm text-gray-500">Belum ada Payment Information.</div>
+              <div className="text-sm text-gray-500">
+                Belum ada Payment Information.
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
@@ -748,11 +923,19 @@ export default function ProgressDetailClient({
                   <tbody>
                     {payments.map((p) => (
                       <tr key={p.Id} className="border-t border-gray-100">
-                        <td className="py-2 pr-4 whitespace-nowrap">{fmtIDR(p.Amount__c)}</td>
-                        <td className="py-2 pr-4">{p.Payment_Status__c ?? "—"}</td>
+                        <td className="py-2 pr-4 whitespace-nowrap">
+                          {fmtIDR(p.Amount__c)}
+                        </td>
+                        <td className="py-2 pr-4">
+                          {p.Payment_Status__c ?? "—"}
+                        </td>
                         <td className="py-2 pr-4">{p.Payment_For__c ?? "—"}</td>
-                        <td className="py-2 pr-4">{p.Payment_Channel__r?.Payment_Channel_Bank__c ?? "—"}</td>
-                        <td className="py-2 pr-4">{p.Virtual_Account_No__c ?? "—"}</td>
+                        <td className="py-2 pr-4">
+                          {p.Payment_Channel__r?.Payment_Channel_Bank__c ?? "—"}
+                        </td>
+                        <td className="py-2 pr-4">
+                          {p.Virtual_Account_No__c ?? "—"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -764,7 +947,9 @@ export default function ProgressDetailClient({
 
         {/* RIGHT: Dokumen */}
         <div className="relative rounded-[28px] bg-white/90 backdrop-blur-sm shadow-2xl ring-1 ring-white/40 p-6">
-          <div className="text-lg font-semibold text-slate-700 mb-4">Data Application Progres</div>
+          <div className="text-lg font-semibold text-slate-700 mb-4">
+            Data Application Progres
+          </div>
 
           {docsDirty && (
             <div className="flex justify-end mt-4 mb-4">
@@ -787,7 +972,9 @@ export default function ProgressDetailClient({
           {testCardPreviewUrl && (
             <div className="mt-4 mb-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="flex items-center justify-between px-4 py-3">
-                <div className="text-sm font-medium text-slate-700">Test Card (PDF)</div>
+                <div className="text-sm font-medium text-slate-700">
+                  Test Card (PDF)
+                </div>
                 <div className="flex items-center gap-2">
                   <a
                     href={testCardPreviewUrl}
@@ -809,13 +996,11 @@ export default function ProgressDetailClient({
               {/* PDF canvas */}
               <div className="px-4 pb-4">
                 <div className="rounded-xl overflow-hidden border border-gray-100">
-                  {/* Primary (better for Safari/iOS) */}
                   <object
                     data={testCardPreviewUrl}
                     type="application/pdf"
                     className="w-full h-[120px]"
                   >
-                    {/* Fallback */}
                     <iframe
                       src={testCardPreviewUrl}
                       title="Test Card PDF Preview"
@@ -830,10 +1015,21 @@ export default function ProgressDetailClient({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {REQUIRED_TYPES.map((type) => {
               const existing = docsByType.get(type);
-              const uploaded = !!existing && !!getDocOpenUrl(existing!);
+              const uploaded = isUploaded(existing);
+              const verified = isVerified(existing);
+              const declined = isDeclined(existing);
 
               return (
-                <div key={type} className="rounded-3xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7">
+                <div
+                  key={type}
+                  className={`rounded-3xl border ${
+                    declined
+                      ? "border-rose-300"
+                      : verified
+                      ? "border-emerald-300"
+                      : "border-gray-200"
+                  } bg-white shadow-sm hover:shadow-md transition-all p-6 md:p-7`}
+                >
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <div className="text-sm font-medium text-slate-700">
@@ -842,8 +1038,26 @@ export default function ProgressDetailClient({
                           <span className="text-rose-600 ml-1">*</span>
                         )}
                       </div>
-                      <div className={`text-xs mt-1 ${uploaded ? "text-emerald-600" : "text-rose-600"}`}>
-                        {uploaded ? "Uploaded" : "Not Uploaded"}
+                      <div
+                        className={`text-xs mt-1 ${
+                          verified
+                            ? "text-emerald-600"
+                            : declined
+                            ? "text-rose-600"
+                            : uploaded
+                            ? "text-amber-600"
+                            : "text-rose-600"
+                        }`}
+                      >
+                        {verified
+                          ? "Verified"
+                          : declined
+                          ? "Declined – upload ulang"
+                          : uploaded
+                          ? "Menunggu verifikasi"
+                          : REQUIRED_UPLOADS.has(type as RequiredType)
+                          ? "Not Uploaded (wajib)"
+                          : "Not Uploaded"}
                       </div>
                     </div>
 
@@ -860,8 +1074,14 @@ export default function ProgressDetailClient({
                   </div>
 
                   <div className="mb-3">
-                    <label className="block text-xs text-gray-600 mb-1">Document Type</label>
-                    <select className="w-full border rounded px-3 py-2 text-sm bg-gray-50" value={existing ? getType(existing) : type} disabled>
+                    <label className="block text-xs text-gray-600 mb-1">
+                      Document Type
+                    </label>
+                    <select
+                      className="w-full border rounded px-3 py-2 text-sm bg-gray-50"
+                      value={existing ? getType(existing) : type}
+                      disabled
+                    >
                       {REQUIRED_TYPES.map((opt) => (
                         <option key={opt} value={opt}>
                           {opt}
@@ -873,9 +1093,12 @@ export default function ProgressDetailClient({
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-xs text-gray-600">Upload File</span>
 
-                    {/* make a stable, unique id per type */}
+                    {/* stable unique id per type */}
                     {(() => {
-                      const idSafe = `file-${type.toLowerCase().replace(/\s+/g, "-")}`;
+                      const idSafe = `file-${type
+                        .toLowerCase()
+                        .replace(/\s+/g, "-")}`;
+                      const disabledInput = isDisabled || verified;
 
                       return (
                         <>
@@ -888,27 +1111,29 @@ export default function ProgressDetailClient({
                               onPickFile(type as RequiredType, f);
                               ensureDocEntryFor(type as RequiredType);
                             }}
-                            disabled={isDisabled}
+                            disabled={disabledInput}
                           />
 
                           <label
                             htmlFor={idSafe}
                             className={
-                              isDisabled
-                                ?
-                                "inline-flex items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm bg-gray-100 text-gray-400 cursor-default pointer-events-none select-none"
-                                :
-                                "inline-flex items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm bg-white hover:bg-gray-50 active:bg-gray-100 cursor-pointer"
+                              disabledInput
+                                ? "inline-flex items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm bg-gray-100 text-gray-400 cursor-default pointer-events-none select-none"
+                                : "inline-flex items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm bg-white hover:bg-gray-50 active:bg-gray-100 cursor-pointer"
                             }
                           >
-                            {pendingUploads[type]?.name ? "Change File" : "Choose File"}
+                            {verified
+                              ? "Locked (Verified)"
+                              : pendingUploads[type]?.name
+                              ? "Change File"
+                              : "Choose File"}
                           </label>
                         </>
                       );
                     })()}
                   </div>
 
-                  {pendingUploads[type] && (
+                  {pendingUploads[type] && !isVerified(existing) && (
                     <div className="text-xs text-gray-600 mt-2 break-words">
                       Selected: {pendingUploads[type]?.name}
                     </div>
@@ -930,17 +1155,23 @@ function renderObjectEditor(
   isReadOnly: (key: string, val: unknown) => boolean,
   saving: boolean
 ) {
-  const entries = Object.entries(obj).filter(([k, v]) => !omitKeys.includes(k) && isPrimitive(v));
+  const entries = Object.entries(obj).filter(
+    ([k, v]) => !omitKeys.includes(k) && isPrimitive(v)
+  );
 
   if (entries.length === 0) {
-    return <div className="text-sm text-gray-500">Tidak ada field yang dapat diedit.</div>;
+    return (
+      <div className="text-sm text-gray-500">Tidak ada field yang dapat diedit.</div>
+    );
   }
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       {entries.map(([key, val]) => {
         const readOnly = isReadOnly(key, val);
-        const roCls = readOnly ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "";
+        const roCls = readOnly
+          ? "bg-gray-100 text-gray-500 cursor-not-allowed"
+          : "";
 
         if (typeof val === "boolean") {
           return (
@@ -949,7 +1180,12 @@ function renderObjectEditor(
               <select
                 className={`border rounded px-3 py-2 ${roCls}`}
                 value={String(val)}
-                onChange={(e) => setObj({ ...(obj as Record<string, unknown>), [key]: e.target.value === "true" })}
+                onChange={(e) =>
+                  setObj({
+                    ...(obj as Record<string, unknown>),
+                    [key]: e.target.value === "true",
+                  })
+                }
                 disabled={readOnly || saving}
               >
                 <option value="true">true</option>
@@ -969,7 +1205,12 @@ function renderObjectEditor(
               type={inputType}
               className={`border rounded px-3 py-2 ${readOnly ? roCls : ""}`}
               value={String(val ?? "")}
-              onChange={(e) => setObj({ ...(obj as Record<string, unknown>), [key]: e.target.value })}
+              onChange={(e) =>
+                setObj({
+                  ...(obj as Record<string, unknown>),
+                  [key]: e.target.value,
+                })
+              }
               readOnly={(readOnly && !isBirthdate) || saving}
               disabled={(readOnly && !isBirthdate) || saving}
               placeholder={isBirthdate ? "yyyy-mm-dd" : undefined}
