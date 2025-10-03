@@ -86,7 +86,8 @@ export default function OpportunityCard({
             router.push(`/progress/${oppId}`); // next/router akan ganti halaman
         } else {
             setGlobalLoading?.(false);
-            window.location.href = `${process.env.REGISTRATION_WEB_URL}/register.html?opp=${oppId}`;
+            console.log(`${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/register.html?opp=${oppId}`);
+            window.location.href = `${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/register.html?opp=${oppId}`;
         }
         // JANGAN setGlobalLoading(false) — biarkan overlay sampai navigasi selesai.
     }

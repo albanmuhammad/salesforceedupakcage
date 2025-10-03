@@ -166,7 +166,7 @@ export default function LoginPage() {
 
             <p className="text-sm text-center text-gray-600">
               Don’t have an account yet?{" "}
-              <a className="text-blue-600 font-medium hover:underline" href={process.env.REGISTRATION_WEB_URL}>
+              <a className="text-blue-600 font-medium hover:underline" href={`${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/register.html`}>
                 Register
               </a>
             </p>

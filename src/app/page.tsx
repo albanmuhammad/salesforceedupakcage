@@ -25,7 +25,7 @@ export default function Home() {
     <main className="min-h-screen">
       {/* Embed aplikasi lain */}
       <iframe
-        src={`${process.env.REGISTRATION_WEB_URL}/index.html`}
+        src={`${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/index.html`}
         className="w-full h-[90vh] border-0"
         allow="clipboard-read; clipboard-write; fullscreen"
       />
