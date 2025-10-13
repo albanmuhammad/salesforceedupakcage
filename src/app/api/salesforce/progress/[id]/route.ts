@@ -808,6 +808,19 @@ export async function PATCH(
         const normalizePhone = (raw?: string | null) =>
           (raw || "").replace(/[^\d+]/g, "").replace(/^0/, "+62");
 
+        // Kumpulkan Contact yang sudah terpakai oleh applicant ini
+        const usedContactIds = new Set<string>();
+        if (studentContactId) {
+          const rels = await sfQuery<{ Contact__c?: string | null }>(`
+            SELECT Contact__c
+            FROM Relationship__c
+            WHERE Related_Contact__c='${esc(studentContactId)}'
+          `);
+          for (const r of rels) {
+            if (r.Contact__c) usedContactIds.add(r.Contact__c);
+          }
+        }
+
         async function findExistingContact(
           email?: string | null,
           phone?: string | null,
@@ -833,7 +846,8 @@ export async function PATCH(
 
           const rows = await sfQuery<{ Id: string }>(q);
           console.log("rows", rows);
-          return rows[0] ?? null;
+          const hit = rows.find((r) => !usedContactIds.has(r.Id));
+          return hit ?? null;
         }
 
         for (const p of items) {
