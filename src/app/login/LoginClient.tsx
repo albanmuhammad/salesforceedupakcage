@@ -214,7 +214,11 @@ export default function LoginClient() {
               Don’t have an account yet{" "}
               <a
                 className="text-blue-600 font-medium hover:underline"
-                href={`${registrationUrl}/register.html`}
+                href={
+                  role === "school"
+                    ? `${registrationUrl}/registerschool.html`
+                    : `${registrationUrl}/register.html`
+                }
               >
                 Register
               </a>
