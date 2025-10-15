@@ -11,15 +11,28 @@ const supabase = createBrowserClient(
 
 const IDLE_MINUTES = 20; // ubah sesuai kebutuhan
 
+function getCookie(name: string): string | undefined {
+  const m = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  return m ? decodeURIComponent(m.split("=")[1]) : undefined;
+}
+
 export default function LogoutButton() {
   const [loading, setLoading] = useState(false);
   const timer = useRef<number | null>(null);
+
+  const redirectToRoleLogin = () => {
+    const lastRole = (getCookie("lastLoginRole") || "university").toLowerCase();
+    const role = lastRole === "school" ? "school" : "university";
+    window.location.replace(`/login?role=${role}`);
+  };
 
   const logout = async () => {
     setLoading(true);
     try {
       await supabase.auth.signOut();
-      window.location.replace("/login");
+      redirectToRoleLogin();
     } catch (error) {
       console.error("Logout error:", error);
       setLoading(false);
@@ -40,7 +53,9 @@ export default function LogoutButton() {
       "touchstart",
       "scroll",
     ];
-    events.forEach((e) => window.addEventListener(e, handler, { passive: true }));
+    events.forEach((e) =>
+      window.addEventListener(e, handler, { passive: true })
+    );
     reset();
     return () => {
       events.forEach((e) => window.removeEventListener(e, handler));
