@@ -28,7 +28,7 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // 1) Selalu izinkan /login (JANGAN redirect walau ada session)
-  if (pathname === "/login") {
+  if (pathname === "/login" || pathname.startsWith("/login/")) {
     return res;
   }
 
