@@ -29,6 +29,10 @@ type OpportunityRow = {
   Study_Program__c?: string | null;
   Study_Program__r?: { Name?: string | null } | null;
   Test_Schedule__c?: string | null;
+  Master_Metro_School__c?: string | null;
+  Master_Metro_School__r?: { Name?: string | null } | null;
+  Major__c?: string | null;
+  Major__r?: { Name?: string | null } | null;
 };
 
 export async function GET(req: Request) {
@@ -64,7 +68,7 @@ export async function GET(req: Request) {
         Id, Name, StageName, CreatedDate, AccountId, CloseDate, Amount, Is_Active__c,
         Campus__c,            Campus__r.Name,
         Study_Program__c,     Study_Program__r.Name, 
-        Test_Schedule__c,     RecordType.Name, Master_School__c, Major__c
+        Test_Schedule__c,     RecordType.Name, Master_Metro_School__c, Master_Metro_School__r.Name, Major__c, Major__r.Name
       FROM Opportunity
       WHERE AccountId = '${accountId}'
       ORDER BY CreatedDate DESC

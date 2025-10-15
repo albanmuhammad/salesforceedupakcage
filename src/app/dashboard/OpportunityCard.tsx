@@ -18,6 +18,7 @@ export interface OpportunityItem {
     Study_Program__c?: string | null;
     Study_Program__r?: LookupName;
     Test_Schedule__c?: string | null;
+    RecordType_Name?: string | null;
 }
 
 function normalizeStage(stage?: string | null) {
@@ -78,16 +79,22 @@ export default function OpportunityCard({
         }
     }
 
-    async function routeAfter(oppId: string, stage?: string | null, webStage?: string | null) {
+    async function routeAfter(oppId: string, stage?: string | null, webStage?: string | null, RecordType_Name?: string | null) {
         setBusy("routing");
         setGlobalLoading?.(true);
         const reReg = isReRegistration(stage, webStage);
         if (reReg) {
             router.push(`/progress/${oppId}`); // next/router akan ganti halaman
         } else {
-            setGlobalLoading?.(false);
-            console.log(`${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/register.html?opp=${oppId}`);
-            window.location.href = `${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/register.html?opp=${oppId}`;
+            if (RecordType_Name == 'University') {
+                setGlobalLoading?.(false);
+                console.log(`${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/register.html?opp=${oppId}`);
+                window.location.href = `${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/register.html?opp=${oppId}`;
+            } else {
+                setGlobalLoading?.(false);
+                console.log(`${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/registerschool.html?opp=${oppId}`);
+                window.location.href = `${process.env.NEXT_PUBLIC_REGISTRATION_WEB_URL}/registerschool.html?opp=${oppId}`;
+            }
         }
         // JANGAN setGlobalLoading(false) — biarkan overlay sampai navigasi selesai.
     }
@@ -100,7 +107,7 @@ export default function OpportunityCard({
             setOpen(true);
             return;
         }
-        await routeAfter(item.Id, item.StageName, item.Web_Stage__c);
+        await routeAfter(item.Id, item.StageName, item.Web_Stage__c, item.RecordType_Name);
     }
 
     async function onConfirm() {

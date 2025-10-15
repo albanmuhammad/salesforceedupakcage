@@ -22,8 +22,8 @@ export interface OpportunityItem {
   RecordType_Name?: string | null;
 
   // ▼ add these for school flows (if you have lookups, they'll show .Name)
-  Master_School__c?: string | null;
-  Master_School__r?: LookupName;
+  Master_Metro_School__c?: string | null;
+  Master_Metro_School__r?: LookupName;
   Major__c?: string | null;
   Major__r?: LookupName;
 }
@@ -220,7 +220,7 @@ export default function DashboardClient({
                             <>
                               <div className="flex gap-2">
                                 <dt className="w-32 text-gray-500">master school:</dt>
-                                <dd className="flex-1">{p.Master_School__r?.Name ?? p.Master_School__c ?? "—"}</dd>
+                                <dd className="flex-1">{p.Master_Metro_School__r?.Name ?? p.Master_Metro_School__c ?? "—"}</dd>
                               </div>
                               <div className="flex gap-2">
                                 <dt className="w-32 text-gray-500">major:</dt>
