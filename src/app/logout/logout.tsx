@@ -1,4 +1,4 @@
-// app/logout/logout.tsx
+// src/app/logout/logout.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -9,22 +9,22 @@ const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-const IDLE_MINUTES = 20; // ubah sesuai kebutuhan
+const IDLE_MINUTES = 20;
 
-function getCookie(name: string): string | undefined {
-  const m = document.cookie
-    .split("; ")
-    .find((row) => row.startsWith(`${name}=`));
-  return m ? decodeURIComponent(m.split("=")[1]) : undefined;
+function getSavedRole(): "school" | "university" {
+  try {
+    const r = localStorage.getItem("loginRole");
+    if (r === "school" || r === "university") return r;
+  } catch {}
+  return "university";
 }
 
 export default function LogoutButton() {
   const [loading, setLoading] = useState(false);
   const timer = useRef<number | null>(null);
 
-  const redirectToRoleLogin = () => {
-    const lastRole = (getCookie("lastLoginRole") || "university").toLowerCase();
-    const role = lastRole === "school" ? "school" : "university";
+  const redirectToLogin = () => {
+    const role = getSavedRole();
     window.location.replace(`/login?role=${role}`);
   };
 
@@ -32,10 +32,10 @@ export default function LogoutButton() {
     setLoading(true);
     try {
       await supabase.auth.signOut();
-      redirectToRoleLogin();
     } catch (error) {
       console.error("Logout error:", error);
-      setLoading(false);
+    } finally {
+      redirectToLogin();
     }
   };
 
@@ -53,9 +53,7 @@ export default function LogoutButton() {
       "touchstart",
       "scroll",
     ];
-    events.forEach((e) =>
-      window.addEventListener(e, handler, { passive: true })
-    );
+    events.forEach((e) => window.addEventListener(e, handler, { passive: true }));
     reset();
     return () => {
       events.forEach((e) => window.removeEventListener(e, handler));
@@ -76,19 +74,8 @@ export default function LogoutButton() {
           fill="none"
           viewBox="0 0 24 24"
         >
-          <circle
-            className="opacity-30"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-90"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-          />
+          <circle className="opacity-30" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
         </svg>
       )}
       {loading ? "Logging out..." : "Logout"}

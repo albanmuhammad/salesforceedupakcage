@@ -45,7 +45,12 @@ export default function ChooseLoginPage() {
     };
   }, [role]);
 
-  const goLogin = () => r.push(`/login?role=${role}`);
+  const goLogin = () => {
+    try {
+      localStorage.setItem("loginRole", role);
+    } catch {}
+    r.push(`/login?role=${role}`);
+  };
 
   return (
     <main className="min-h-[calc(100vh-1px)] w-full bg-gray-50 flex items-start md:items-center justify-center px-4 py-10">
