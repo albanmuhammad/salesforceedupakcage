@@ -25,6 +25,7 @@ type OpportunityRow = {
   Is_Active__c: boolean;
   Campus__c?: string | null;
   Campus__r?: { Name?: string | null } | null;
+  RecordType?: { Name?: string | null } | null;
   Study_Program__c?: string | null;
   Study_Program__r?: { Name?: string | null } | null;
   Test_Schedule__c?: string | null;
@@ -62,13 +63,20 @@ export async function GET(req: Request) {
       SELECT
         Id, Name, StageName, CreatedDate, AccountId, CloseDate, Amount, Is_Active__c,
         Campus__c,            Campus__r.Name,
-        Study_Program__c,     Study_Program__r.Name,
-        Test_Schedule__c
+        Study_Program__c,     Study_Program__r.Name, 
+        Test_Schedule__c,     RecordType.Name, Master_School__c, Major__c
       FROM Opportunity
       WHERE AccountId = '${accountId}'
       ORDER BY CreatedDate DESC
     `;
-    const items = await sfQuery<OpportunityRow>(qOpp);
+    const rows = await sfQuery<OpportunityRow>(qOpp);
+
+    // Flatten RecordType.Name -> RecordType_Name langsung di sini
+    const items = rows.map((r) => ({
+      ...r,
+      RecordType_Name: r.RecordType?.Name ?? null,
+    }));
+
     return { applicantName, items };
   };
 

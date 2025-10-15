@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import LogoutButton from "@/app/logout/logout";
 import OpportunityCard from "./OpportunityCard";
 
+// --- types: add related-name lookups if available
 export type LookupName = { Name?: string } | null;
 
 export interface OpportunityItem {
@@ -18,7 +19,15 @@ export interface OpportunityItem {
   Study_Program__c?: string | null;
   Study_Program__r?: LookupName;
   Test_Schedule__c?: string | null;
+  RecordType_Name?: string | null;
+
+  // ▼ add these for school flows (if you have lookups, they'll show .Name)
+  Master_School__c?: string | null;
+  Master_School__r?: LookupName;
+  Major__c?: string | null;
+  Major__r?: LookupName;
 }
+
 
 export interface ProgressResponse {
   ok: boolean;
@@ -185,14 +194,46 @@ export default function DashboardClient({
                         <dt className="w-32 text-gray-500">status:</dt>
                         <dd className="flex-1">{p.StageName || "—"}</dd>
                       </div>
-                      <div className="flex gap-2">
-                        <dt className="w-32 text-gray-500">campus:</dt>
-                        <dd className="flex-1">{p.Campus__r?.Name ?? p.Campus__c ?? "—"}</dd>
-                      </div>
-                      <div className="flex gap-2">
-                        <dt className="w-32 text-gray-500">study program:</dt>
-                        <dd className="flex-1">{p.Study_Program__r?.Name ?? p.Study_Program__c ?? "—"}</dd>
-                      </div>
+
+                      {(() => {
+                        const rt = (p.RecordType_Name || "").toLowerCase();
+                        const isUniversity = rt.includes("university");
+                        const isSchool = rt.includes("school");
+
+                        if (isUniversity) {
+                          return (
+                            <>
+                              <div className="flex gap-2">
+                                <dt className="w-32 text-gray-500">campus:</dt>
+                                <dd className="flex-1">{p.Campus__r?.Name ?? p.Campus__c ?? "—"}</dd>
+                              </div>
+                              <div className="flex gap-2">
+                                <dt className="w-32 text-gray-500">study program:</dt>
+                                <dd className="flex-1">{p.Study_Program__r?.Name ?? p.Study_Program__c ?? "—"}</dd>
+                              </div>
+                            </>
+                          );
+                        }
+
+                        if (isSchool) {
+                          return (
+                            <>
+                              <div className="flex gap-2">
+                                <dt className="w-32 text-gray-500">master school:</dt>
+                                <dd className="flex-1">{p.Master_School__r?.Name ?? p.Master_School__c ?? "—"}</dd>
+                              </div>
+                              <div className="flex gap-2">
+                                <dt className="w-32 text-gray-500">major:</dt>
+                                <dd className="flex-1">{p.Major__r?.Name ?? p.Major__c ?? "—"}</dd>
+                              </div>
+                            </>
+                          );
+                        }
+
+                        // Fallback (unknown record type): show nothing extra
+                        return null;
+                      })()}
+
                       <div className="flex gap-2">
                         <dt className="w-32 text-gray-500">test schedule:</dt>
                         <dd className="flex-1">{formatSFDateTime(p.Test_Schedule__c)}</dd>
