@@ -10,6 +10,7 @@ type Progress = {
   Name: string;
   StageName: string;
   AccountId: string | null;
+  RecordType?: { Name?: string | null } | null;
 };
 
 type PaymentInfoRow = {
@@ -150,12 +151,13 @@ export async function GET(
 
   // 1) Opportunity
   const opps = await sfQuery<Progress>(`
-    SELECT Id, Name, StageName, AccountId
+    SELECT Id, Name, StageName, AccountId, RecordType.Name
     FROM Opportunity
     WHERE Id='${id}'
     LIMIT 1
   `);
   const progress: Progress | null = opps[0] ?? null;
+
   if (!progress) {
     return NextResponse.json(
       { ok: false, error: "not_found" },
