@@ -82,22 +82,30 @@ type RequiredType = SchoolRequiredType | UniversityRequiredType;
 
 /** Dokumen wajib untuk School */
 const SCHOOL_REQUIRED_UPLOADS = new Set<SchoolRequiredType>([
+  "Pas Foto 3x4",
   "Rapor 1",
   "Rapor 2",
   "Rapor 3",
   "Scan KTP Orang Tua",
   "Scan Ijazah",
+  "Scan Akte Kelahiran",
+  "Scan Form Tata Tertib",
   "Scan Kartu Keluarga",
+  "Scan Surat Sehat",
 ]);
 
 /** Dokumen wajib untuk University */
 const UNIVERSITY_REQUIRED_UPLOADS = new Set<UniversityRequiredType>([
+  "Pas Foto 3x4",
   "Rapor 1",
   "Rapor 2",
   "Rapor 3",
   "Scan KTP",
   "Scan Ijazah",
+  "Scan Akte Kelahiran",
+  "Scan Form Tata Tertib",
   "Scan Kartu Keluarga",
+  "Scan Surat Sehat",
 ]);
 
 type ProgressDetailClientProps = {
