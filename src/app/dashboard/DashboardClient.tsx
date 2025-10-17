@@ -191,7 +191,7 @@ export default function DashboardClient({
                     {/* Detail */}
                     <dl className="mt-3 md:mt-4 text-sm md:text-[15px] text-gray-700 space-y-1.5">
                       <div className="flex gap-2">
-                        <dt className="w-32 text-gray-500">status:</dt>
+                        <dt className="w-32 text-gray-500">Status:</dt>
                         <dd className="flex-1">{p.StageName || "—"}</dd>
                       </div>
 
@@ -204,11 +204,11 @@ export default function DashboardClient({
                           return (
                             <>
                               <div className="flex gap-2">
-                                <dt className="w-32 text-gray-500">campus:</dt>
+                                <dt className="w-32 text-gray-500">Campus:</dt>
                                 <dd className="flex-1">{p.Campus__r?.Name ?? p.Campus__c ?? "—"}</dd>
                               </div>
                               <div className="flex gap-2">
-                                <dt className="w-32 text-gray-500">study program:</dt>
+                                <dt className="w-32 text-gray-500">Study Program:</dt>
                                 <dd className="flex-1">{p.Study_Program__r?.Name ?? p.Study_Program__c ?? "—"}</dd>
                               </div>
                             </>
@@ -219,11 +219,11 @@ export default function DashboardClient({
                           return (
                             <>
                               <div className="flex gap-2">
-                                <dt className="w-32 text-gray-500">master school:</dt>
+                                <dt className="w-32 text-gray-500">Master School:</dt>
                                 <dd className="flex-1">{p.Master_Metro_School__r?.Name ?? p.Master_Metro_School__c ?? "—"}</dd>
                               </div>
                               <div className="flex gap-2">
-                                <dt className="w-32 text-gray-500">major:</dt>
+                                <dt className="w-32 text-gray-500">Grade:</dt>
                                 <dd className="flex-1">{p.Major__r?.Name ?? p.Major__c ?? "—"}</dd>
                               </div>
                             </>
@@ -235,7 +235,7 @@ export default function DashboardClient({
                       })()}
 
                       <div className="flex gap-2">
-                        <dt className="w-32 text-gray-500">test schedule:</dt>
+                        <dt className="w-32 text-gray-500">Test Schedule:</dt>
                         <dd className="flex-1">{formatSFDateTime(p.Test_Schedule__c)}</dd>
                       </div>
                     </dl>
